@@ -1,0 +1,1353 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Amazon Bedrock AgentCore Complete Course - Prerequisites.
+  Deploys Cognito, Task Management API (DynamoDB + Lambda + API Gateway),
+  IAM roles for AgentCore Runtime and Gateway, and an S3 bucket for agent code.
+
+Parameters:
+
+  EnableTransactionSearch:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: >
+      Set to 'false' if this account already has X-Ray Transaction Search
+      configured (only one config per account per region is allowed).
+
+Conditions:
+
+  CreateTransactionSearch: !Equals [!Ref EnableTransactionSearch, 'true']
+
+Resources:
+
+  # ============================================================
+  # Cognito User Pool
+  # ============================================================
+
+  AriaUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: aria-user-pool
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  AriaUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: aria-frontend
+      UserPoolId: !Ref AriaUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - http://localhost:3000/
+        - http://localhost:3000/callback
+        - !Sub "https://${AriaDistribution.DomainName}/"
+        - !Sub "https://${AriaDistribution.DomainName}/callback"
+      LogoutURLs:
+        - http://localhost:3000/
+        - !Sub "https://${AriaDistribution.DomainName}/"
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      PreventUserExistenceErrors: ENABLED
+
+  AriaUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "aria-${AWS::AccountId}"
+      UserPoolId: !Ref AriaUserPool
+
+  # ============================================================
+  # DynamoDB Table for Tasks
+  # ============================================================
+
+  AriaTasksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: aria-tasks
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: userId-index
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  # ============================================================
+  # Lambda Function for Task API
+  # ============================================================
+
+  TaskApiLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aria-task-api-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt AriaTasksTable.Arn
+                  - !Sub "${AriaTasksTable.Arn}/index/*"
+
+  TaskApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aria-task-api
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Timeout: 30
+      MemorySize: 256
+      Role: !GetAtt TaskApiLambdaRole.Arn
+      Environment:
+        Variables:
+          TASKS_TABLE_NAME: !Ref AriaTasksTable
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import uuid
+          from datetime import datetime, timezone
+          import boto3
+          from boto3.dynamodb.conditions import Key
+
+          dynamodb = boto3.resource("dynamodb")
+          table = dynamodb.Table(os.environ["TASKS_TABLE_NAME"])
+          VALID_STATUSES = {"pending", "in_progress", "completed"}
+
+          def lambda_handler(event, context):
+              http_method = event["httpMethod"]
+              resource = event.get("resource", "")
+              path_params = event.get("pathParameters") or {}
+              try:
+                  if resource == "/tasks" and http_method == "GET":
+                      return list_tasks(event)
+                  elif resource == "/tasks" and http_method == "POST":
+                      return create_task(event)
+                  elif resource == "/tasks/{id}" and http_method == "PUT":
+                      return update_task(event, path_params["id"])
+                  elif resource == "/tasks/{id}" and http_method == "DELETE":
+                      return delete_task(event, path_params["id"])
+                  elif http_method == "OPTIONS":
+                      return resp(200, {"message": "OK"})
+                  else:
+                      return resp(404, {"error": f"Not found: {http_method} {resource}"})
+              except json.JSONDecodeError:
+                  return resp(400, {"error": "Invalid JSON in request body"})
+              except Exception as e:
+                  print(f"Error: {e}")
+                  return resp(500, {"error": "Internal server error"})
+
+          def get_user_id(event):
+              headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+              if headers.get("x-user-id"):
+                  return headers["x-user-id"]
+              rc = event.get("requestContext", {})
+              claims = rc.get("authorizer", {}).get("claims", {})
+              if claims.get("sub"):
+                  return claims["sub"]
+              qp = event.get("queryStringParameters") or {}
+              if qp.get("userId"):
+                  return qp["userId"]
+              return "anonymous"
+
+          def list_tasks(event):
+              user_id = get_user_id(event)
+              qp = event.get("queryStringParameters") or {}
+              result = table.query(IndexName="userId-index", KeyConditionExpression=Key("userId").eq(user_id))
+              tasks = result.get("Items", [])
+              sf = qp.get("status")
+              if sf and sf in VALID_STATUSES:
+                  tasks = [t for t in tasks if t.get("status") == sf]
+              return resp(200, {"tasks": tasks, "count": len(tasks)})
+
+          def create_task(event):
+              user_id = get_user_id(event)
+              body = json.loads(event.get("body") or "{}")
+              if not body.get("title"):
+                  return resp(400, {"error": "title is required"})
+              status = body.get("status", "pending")
+              if status not in VALID_STATUSES:
+                  return resp(400, {"error": f"Invalid status '{status}'"})
+              now = datetime.now(timezone.utc).isoformat()
+              task = {"id": str(uuid.uuid4()), "userId": user_id, "title": body["title"],
+                      "description": body.get("description", ""), "status": status,
+                      "createdAt": now, "updatedAt": now}
+              table.put_item(Item=task)
+              return resp(201, {"task": task})
+
+          def update_task(event, task_id):
+              user_id = get_user_id(event)
+              body = json.loads(event.get("body") or "{}")
+              existing = table.get_item(Key={"id": task_id}).get("Item")
+              if not existing:
+                  return resp(404, {"error": f"Task {task_id} not found"})
+              if existing["userId"] != user_id:
+                  return resp(403, {"error": "Not authorized"})
+              if "status" in body and body["status"] not in VALID_STATUSES:
+                  return resp(400, {"error": f"Invalid status '{body['status']}'"})
+              now = datetime.now(timezone.utc).isoformat()
+              parts = ["#ua = :ua"]
+              names = {"#ua": "updatedAt"}
+              vals = {":ua": now}
+              for f in ("title", "description", "status"):
+                  if f in body:
+                      parts.append(f"#{f} = :{f}")
+                      names[f"#{f}"] = f
+                      vals[f":{f}"] = body[f]
+              table.update_item(Key={"id": task_id}, UpdateExpression="SET " + ", ".join(parts),
+                                ExpressionAttributeNames=names, ExpressionAttributeValues=vals)
+              updated = table.get_item(Key={"id": task_id}).get("Item")
+              return resp(200, {"task": updated})
+
+          def delete_task(event, task_id):
+              user_id = get_user_id(event)
+              existing = table.get_item(Key={"id": task_id}).get("Item")
+              if not existing:
+                  return resp(404, {"error": f"Task {task_id} not found"})
+              if existing["userId"] != user_id:
+                  return resp(403, {"error": "Not authorized"})
+              table.delete_item(Key={"id": task_id})
+              return resp(200, {"message": f"Task {task_id} deleted"})
+
+          def resp(status_code, body):
+              return {"statusCode": status_code,
+                      "headers": {"Content-Type": "application/json",
+                                  "Access-Control-Allow-Origin": "*",
+                                  "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+                                  "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-User-Id"},
+                      "body": json.dumps(body, default=str)}
+
+  # ============================================================
+  # API Gateway REST API (REGIONAL, IAM Auth)
+  # ============================================================
+
+  TaskApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: aria-task-api
+      Description: Task Management API for Aria (accessed via AgentCore Gateway)
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # Request models for OpenAPI schema generation
+  CreateTaskModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref TaskApi
+      ContentType: application/json
+      Name: CreateTask
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        required:
+          - title
+        properties:
+          title:
+            type: string
+            description: Task title
+          description:
+            type: string
+            description: Task description
+          status:
+            type: string
+            description: "Task status: pending, in_progress, or completed"
+
+  UpdateTaskModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !Ref TaskApi
+      ContentType: application/json
+      Name: UpdateTask
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        properties:
+          title:
+            type: string
+            description: New task title
+          description:
+            type: string
+            description: New task description
+          status:
+            type: string
+            description: "New task status: pending, in_progress, or completed"
+
+  # /tasks resource
+  TasksResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TaskApi
+      ParentId: !GetAtt TaskApi.RootResourceId
+      PathPart: tasks
+
+  # /tasks/{id} resource
+  TaskIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TaskApi
+      ParentId: !Ref TasksResource
+      PathPart: "{id}"
+
+  # Lambda permission for API Gateway
+  TaskApiLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt TaskApiFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TaskApi}/*"
+
+  # GET /tasks
+  GetTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskApi
+      ResourceId: !Ref TasksResource
+      HttpMethod: GET
+      AuthorizationType: AWS_IAM
+      RequestParameters:
+        method.request.querystring.status: false
+      MethodResponses:
+        - StatusCode: '200'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TaskApiFunction.Arn}/invocations"
+
+  # POST /tasks
+  PostTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskApi
+      ResourceId: !Ref TasksResource
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      RequestModels:
+        application/json: !Ref CreateTaskModel
+      MethodResponses:
+        - StatusCode: '200'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TaskApiFunction.Arn}/invocations"
+
+  # PUT /tasks/{id}
+  PutTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskApi
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: PUT
+      AuthorizationType: AWS_IAM
+      RequestModels:
+        application/json: !Ref UpdateTaskModel
+      MethodResponses:
+        - StatusCode: '200'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TaskApiFunction.Arn}/invocations"
+
+  # DELETE /tasks/{id}
+  DeleteTaskMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskApi
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: DELETE
+      AuthorizationType: AWS_IAM
+      MethodResponses:
+        - StatusCode: '200'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TaskApiFunction.Arn}/invocations"
+
+  # OPTIONS /tasks (CORS)
+  OptionsTasksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskApi
+      ResourceId: !Ref TasksResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Api-Key,X-User-Id,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # OPTIONS /tasks/{id} (CORS)
+  OptionsTaskIdMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TaskApi
+      ResourceId: !Ref TaskIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Api-Key,X-User-Id,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # API Deployment
+  TaskApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - GetTasksMethod
+      - PostTasksMethod
+      - PutTaskMethod
+      - DeleteTaskMethod
+      - OptionsTasksMethod
+      - OptionsTaskIdMethod
+    Properties:
+      RestApiId: !Ref TaskApi
+
+  TaskApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref TaskApi
+      DeploymentId: !Ref TaskApiDeployment
+      StageName: prod
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingRateLimit: 50
+          ThrottlingBurstLimit: 100
+
+  # ============================================================
+  # Frontend: DynamoDB Sessions Table
+  # ============================================================
+
+  AriaSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: aria-sessions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: sessionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: sessionId
+          KeyType: RANGE
+
+  # ============================================================
+  # Frontend: S3 + CloudFront
+  # ============================================================
+
+  AriaFrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "aria-frontend-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AriaFrontendOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: aria-frontend-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  AriaDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: AriaFrontendBucket
+    Properties:
+      DistributionConfig:
+        Comment: Aria AI assistant frontend
+        Enabled: true
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+          MinimumProtocolVersion: TLSv1.2_2021
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          AllowedMethods:
+            - GET
+            - HEAD
+          Compress: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt AriaFrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt AriaFrontendOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  AriaFrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn:
+      - AriaFrontendBucket
+      - AriaDistribution
+    Properties:
+      Bucket: !Ref AriaFrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${AriaFrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${AriaDistribution}"
+
+  # ============================================================
+  # Frontend: Lambda IAM Roles
+  # ============================================================
+
+  AriaSessionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aria-session-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SessionsDynamoDB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt AriaSessionsTable.Arn
+
+  AriaHistoryLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aria-history-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AgentCoreMemory
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:ListEvents
+                  - bedrock-agentcore:ListMemoryRecords
+                  - bedrock-agentcore:RetrieveMemoryRecords
+                  - bedrock-agentcore:GetMemoryRecord
+                Resource: "*"
+
+  # ============================================================
+  # Frontend: Lambda Functions
+  # ============================================================
+
+  AriaSessionsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aria-sessions
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      MemorySize: 256
+      Role: !GetAtt AriaSessionLambdaRole.Arn
+      Environment:
+        Variables:
+          SESSIONS_TABLE_NAME: !Ref AriaSessionsTable
+      Code:
+        ZipFile: |
+          import json, os
+          from decimal import Decimal
+          import boto3
+          from boto3.dynamodb.conditions import Key, Attr
+          table = boto3.resource("dynamodb").Table(os.environ["SESSIONS_TABLE_NAME"])
+          def handler(event, context):
+              uid = event.get("requestContext",{}).get("authorizer",{}).get("claims",{}).get("sub","unknown")
+              try:
+                  r = table.query(KeyConditionExpression=Key("userId").eq(uid), FilterExpression=Attr("deleted").ne(True))
+                  sessions = sorted(r.get("Items",[]), key=lambda s: s.get("updatedAt",""), reverse=True)
+                  body = json.dumps({"sessions": sessions, "userId": uid}, default=lambda o: str(o) if isinstance(o, Decimal) else o)
+                  return {"statusCode": 200, "headers": _h(), "body": body}
+              except Exception as e:
+                  return {"statusCode": 500, "headers": _h(), "body": json.dumps({"error": str(e)})}
+          def _h():
+              return {"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"Content-Type,Authorization"}
+
+  AriaUpsertSessionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aria-upsert-session
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 10
+      MemorySize: 256
+      Role: !GetAtt AriaSessionLambdaRole.Arn
+      Environment:
+        Variables:
+          SESSIONS_TABLE_NAME: !Ref AriaSessionsTable
+      Code:
+        ZipFile: |
+          import json, os
+          from datetime import datetime, timezone
+          import boto3
+          table = boto3.resource("dynamodb").Table(os.environ["SESSIONS_TABLE_NAME"])
+          def handler(event, context):
+              uid = event.get("requestContext",{}).get("authorizer",{}).get("claims",{}).get("sub","unknown")
+              sid = (event.get("pathParameters") or {}).get("sessionId")
+              if not sid:
+                  return {"statusCode":400,"headers":_h(),"body":json.dumps({"error":"sessionId required"})}
+              try:
+                  body = json.loads(event.get("body") or "{}")
+              except Exception:
+                  body = {}
+              title = body.get("title","New conversation")
+              now = datetime.now(timezone.utc).isoformat()
+              try:
+                  table.update_item(
+                      Key={"userId":uid,"sessionId":sid},
+                      UpdateExpression="SET title=if_not_exists(title,:t),createdAt=if_not_exists(createdAt,:n),updatedAt=:n,deleted=if_not_exists(deleted,:f)",
+                      ExpressionAttributeValues={":t":title,":n":now,":f":False})
+                  return {"statusCode":200,"headers":_h(),"body":json.dumps({"sessionId":sid,"title":title})}
+              except Exception as e:
+                  return {"statusCode":500,"headers":_h(),"body":json.dumps({"error":str(e)})}
+          def _h():
+              return {"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"Content-Type,Authorization"}
+
+  AriaDeleteSessionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aria-delete-session
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 10
+      MemorySize: 256
+      Role: !GetAtt AriaSessionLambdaRole.Arn
+      Environment:
+        Variables:
+          SESSIONS_TABLE_NAME: !Ref AriaSessionsTable
+      Code:
+        ZipFile: |
+          import json, os
+          from datetime import datetime, timezone
+          import boto3
+          table = boto3.resource("dynamodb").Table(os.environ["SESSIONS_TABLE_NAME"])
+          def handler(event, context):
+              uid = event.get("requestContext",{}).get("authorizer",{}).get("claims",{}).get("sub","unknown")
+              sid = (event.get("pathParameters") or {}).get("sessionId")
+              if not sid:
+                  return {"statusCode":400,"headers":_h(),"body":json.dumps({"error":"sessionId required"})}
+              now = datetime.now(timezone.utc).isoformat()
+              try:
+                  table.update_item(Key={"userId":uid,"sessionId":sid},
+                      UpdateExpression="SET deleted=:d,updatedAt=:n",
+                      ExpressionAttributeValues={":d":True,":n":now})
+                  return {"statusCode":200,"headers":_h(),"body":json.dumps({"sessionId":sid,"deleted":True})}
+              except Exception as e:
+                  return {"statusCode":500,"headers":_h(),"body":json.dumps({"error":str(e)})}
+          def _h():
+              return {"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"Content-Type,Authorization"}
+
+  AriaHistoryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: aria-history
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 30
+      MemorySize: 256
+      Role: !GetAtt AriaHistoryLambdaRole.Arn
+      Environment:
+        Variables:
+          MEMORY_ID: "PLACEHOLDER"
+      Code:
+        ZipFile: |
+          import json, os
+          import boto3
+          MEMORY_ID = os.environ.get("MEMORY_ID","")
+          REGION = os.environ.get("AWS_REGION","us-east-1")
+          def handler(event, context):
+              uid = event.get("requestContext",{}).get("authorizer",{}).get("claims",{}).get("sub","unknown")
+              sid = (event.get("pathParameters") or {}).get("sessionId")
+              if not sid:
+                  return {"statusCode":400,"headers":_h(),"body":json.dumps({"error":"sessionId required"})}
+              if not MEMORY_ID or MEMORY_ID == "PLACEHOLDER":
+                  return {"statusCode":200,"headers":_h(),"body":"[]"}
+              try:
+                  client = boto3.client("bedrock-agentcore", region_name=REGION)
+                  r = client.list_events(memoryId=MEMORY_ID, sessionId=sid, actorId=uid, includePayloads=True)
+                  events = sorted(r.get("events",[]), key=lambda e: e.get("eventId",""))
+                  messages = []
+                  for evt in events:
+                      for p in evt.get("payload",[]):
+                          text = p.get("conversational",{}).get("content",{}).get("text","")
+                          if not text: continue
+                          try: parsed = json.loads(text)
+                          except Exception: continue
+                          msg = parsed.get("message",{})
+                          role = msg.get("role")
+                          if role not in ("user","assistant"): continue
+                          parts = []
+                          for b in msg.get("content",[]):
+                              if isinstance(b,str): parts.append(b)
+                              elif isinstance(b,dict) and "text" in b: parts.append(b["text"])
+                          t = "\n".join(parts).strip()
+                          if t: messages.append({"role":role,"content":t})
+                  return {"statusCode":200,"headers":_h(),"body":json.dumps(messages)}
+              except Exception as e:
+                  print(f"Error: {e}")
+                  return {"statusCode":500,"headers":_h(),"body":json.dumps({"error":str(e)})}
+          def _h():
+              return {"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"Content-Type,Authorization"}
+
+  # ============================================================
+  # Frontend: API Gateway REST API
+  # ============================================================
+
+  AriaFrontendApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: aria-api
+      Description: Aria AI assistant API (streaming proxy + session management)
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  AriaFrontendAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: aria-cognito-authorizer
+      RestApiId: !Ref AriaFrontendApi
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !GetAtt AriaUserPool.Arn
+
+  # /chat resource (method added by deploy script when Runtime is known)
+  AriaChatResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ParentId: !GetAtt AriaFrontendApi.RootResourceId
+      PathPart: chat
+
+  AriaChatOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ResourceId: !Ref AriaChatResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # /sessions resource
+  AriaSessionsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ParentId: !GetAtt AriaFrontendApi.RootResourceId
+      PathPart: sessions
+
+  AriaSessionsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AriaSessionsFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AriaFrontendApi}/*"
+
+  AriaGetSessions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ResourceId: !Ref AriaSessionsResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref AriaFrontendAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AriaSessionsFunction.Arn}/invocations"
+
+  AriaSessionsOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ResourceId: !Ref AriaSessionsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # /sessions/{sessionId} resource
+  AriaSessionIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ParentId: !Ref AriaSessionsResource
+      PathPart: "{sessionId}"
+
+  AriaUpsertSessionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AriaUpsertSessionFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AriaFrontendApi}/*"
+
+  AriaDeleteSessionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AriaDeleteSessionFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AriaFrontendApi}/*"
+
+  AriaPutSession:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ResourceId: !Ref AriaSessionIdResource
+      HttpMethod: PUT
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref AriaFrontendAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AriaUpsertSessionFunction.Arn}/invocations"
+
+  AriaDeleteSession:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ResourceId: !Ref AriaSessionIdResource
+      HttpMethod: DELETE
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref AriaFrontendAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AriaDeleteSessionFunction.Arn}/invocations"
+
+  AriaSessionIdOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ResourceId: !Ref AriaSessionIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # /history/{sessionId} resource
+  AriaHistoryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ParentId: !GetAtt AriaFrontendApi.RootResourceId
+      PathPart: history
+
+  AriaHistorySessionIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ParentId: !Ref AriaHistoryResource
+      PathPart: "{sessionId}"
+
+  AriaHistoryPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt AriaHistoryFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AriaFrontendApi}/*"
+
+  AriaGetHistory:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ResourceId: !Ref AriaHistorySessionIdResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref AriaFrontendAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AriaHistoryFunction.Arn}/invocations"
+
+  AriaHistoryOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      ResourceId: !Ref AriaHistorySessionIdResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # API Deployment (session/history endpoints only; /chat added by deploy script)
+  AriaFrontendApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - AriaGetSessions
+      - AriaPutSession
+      - AriaDeleteSession
+      - AriaGetHistory
+      - AriaSessionsOptions
+      - AriaSessionIdOptions
+      - AriaHistoryOptions
+      - AriaChatOptions
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+
+  AriaFrontendApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref AriaFrontendApi
+      DeploymentId: !Ref AriaFrontendApiDeployment
+      StageName: prod
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingRateLimit: 100
+          ThrottlingBurstLimit: 200
+
+  # ============================================================
+  # IAM Roles for AgentCore
+  # ============================================================
+
+  AriaRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aria-runtime-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: aria-runtime-permissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - aws-marketplace:ViewSubscriptions
+                  - aws-marketplace:Subscribe
+                Resource: "*"
+              - Effect: Allow
+                Action: bedrock-agentcore:*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "${AriaAgentCodeBucket.Arn}/*"
+
+  AriaGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aria-gateway-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: aria-gateway-permissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:InvokeGateway
+                  - bedrock-agentcore:GetWorkloadAccessToken
+                  - bedrock-agentcore:AuthorizeAction
+                  - bedrock-agentcore:PartiallyAuthorizeActions
+                  - bedrock-agentcore:CheckAuthorizePermissions
+                  - bedrock-agentcore:GetPolicyEngine
+                Resource: "*"
+              - Effect: Allow
+                Action: execute-api:Invoke
+                Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TaskApi}/*"
+
+  # ============================================================
+  # IAM Role for AgentCore Evaluations
+  # ============================================================
+
+  AriaEvaluationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: aria-evaluation-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: aria-evaluation-permissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:StartQuery
+                  - logs:StopQuery
+                  - logs:GetQueryResults
+                  - logs:GetLogRecord
+                  - logs:GetLogGroupFields
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vendedlogs/bedrock-agentcore/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vendedlogs/bedrock-agentcore/*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:aws/spans:*"
+              - Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/evaluations/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/evaluations/*:*"
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:Converse
+                  - bedrock:ConverseStream
+                Resource:
+                  - "arn:aws:bedrock:*::foundation-model/*"
+                  - !Sub "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*"
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:Evaluate
+                Resource: "*"
+
+  # ============================================================
+  # S3 Bucket for Agent Code Artifacts
+  # ============================================================
+
+  AriaAgentCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "aria-agent-code-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+
+  # ============================================================
+  # Observability: CloudWatch Transaction Search
+  # ============================================================
+  # Enables X-Ray to send trace spans to CloudWatch Logs for
+  # distributed tracing. Takes ~10 minutes to become active.
+  # This is an account-level setting (one per account per region).
+
+  # Resource policy allowing X-Ray to write spans to CloudWatch Logs.
+  # Must be created BEFORE TransactionSearchConfig so X-Ray already has
+  # permission when transaction search is enabled.
+  TransactionSearchResourcePolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Condition: CreateTransactionSearch
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      PolicyName: AgentCoreTransactionSearchXRayAccess
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "TransactionSearchXRayAccess",
+              "Effect": "Allow",
+              "Principal": {"Service": "xray.amazonaws.com"},
+              "Action": ["logs:PutLogEvents", "logs:CreateLogStream"],
+              "Resource": [
+                "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:aws/spans:*",
+                "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/application-signals/data:*"
+              ],
+              "Condition": {
+                "ArnEquals": {"aws:SourceArn": "arn:aws:xray:${AWS::Region}:${AWS::AccountId}:*"},
+                "StringEquals": {"aws:SourceAccount": "${AWS::AccountId}"}
+              }
+            }
+          ]
+        }
+
+  TransactionSearchConfig:
+    Type: AWS::XRay::TransactionSearchConfig
+    Condition: CreateTransactionSearch
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    DependsOn: TransactionSearchResourcePolicy
+    Properties:
+      IndexingPercentage: 100
+
+Outputs:
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref AriaUserPool
+
+  UserPoolClientId:
+    Description: Cognito App Client ID
+    Value: !Ref AriaUserPoolClient
+
+  CognitoDomainUrl:
+    Description: Cognito Hosted UI URL
+    Value: !Sub "https://aria-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
+
+  TaskApiUrl:
+    Description: Task Management API URL
+    Value: !Sub "https://${TaskApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  TaskApiRestApiId:
+    Description: Task Management API REST API ID (needed for Gateway setup)
+    Value: !Ref TaskApi
+
+  RuntimeRoleArn:
+    Description: IAM role ARN for AgentCore Runtime
+    Value: !GetAtt AriaRuntimeRole.Arn
+
+  GatewayRoleArn:
+    Description: IAM role ARN for AgentCore Gateway
+    Value: !GetAtt AriaGatewayRole.Arn
+
+  EvaluationRoleArn:
+    Description: IAM role ARN for AgentCore Evaluations
+    Value: !GetAtt AriaEvaluationRole.Arn
+
+  S3BucketName:
+    Description: S3 bucket for agent code artifacts
+    Value: !Ref AriaAgentCodeBucket
+
+  FrontendApiId:
+    Description: Frontend API Gateway REST API ID
+    Value: !Ref AriaFrontendApi
+
+  FrontendApiUrl:
+    Description: Frontend API Gateway URL
+    Value: !Sub "https://${AriaFrontendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  FrontendChatResourceId:
+    Description: API Gateway resource ID for /chat (used by deploy script)
+    Value: !Ref AriaChatResource
+
+  CloudFrontUrl:
+    Description: CloudFront distribution URL for the frontend
+    Value: !Sub "https://${AriaDistribution.DomainName}"
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID (for cache invalidation)
+    Value: !Ref AriaDistribution
+
+  FrontendBucketName:
+    Description: S3 bucket for frontend files
+    Value: !Ref AriaFrontendBucket
+
+  Region:
+    Description: AWS Region
+    Value: !Ref AWS::Region

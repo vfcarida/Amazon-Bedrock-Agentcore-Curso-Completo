@@ -1,0 +1,5 @@
+strands-agents
+strands-agents-tools[agent_core_code_interpreter,agent_core_browser]
+bedrock-agentcore[strands-agents]
+mcp
+aws-opentelemetry-distro

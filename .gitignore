@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# CDK
+cdk.out/
+outputs.json
+
+# OS
+.DS_Store
+
+# Workshop runtime config
+shared/.config/
