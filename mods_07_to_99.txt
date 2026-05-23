@@ -1,0 +1,401 @@
+
+
+=== 07-observability-evaluations ===
+--- CELL 0 ---
+# Module 7: Observability & Evaluations -- Monitoring in Production
+
+![Overview](../shared/img/07.drawio.png)
+
+Throughout this workshop, you have been enabling **Tracing** on each AgentCore resource as it was created. The Runtime has been exporting OpenTelemetry traces since Module 2, and Memory and Gateway resources have had tracing enabled since Modules 4 and 5.
+
+In this module, you explore that accumulated data, deploy the final production-hardened version of Aria (V5), then set up **custom evaluators** that continuously score the agent's performance.
+
+## What you will learn
+
+- **Exploring traces**: Navigate the CloudWatch GenAI Observability dashboard to view agent traces, memory operations, and gateway requests
+- **Understanding the trace pipeline**: How ADOT instrumentation and X-Ray Transaction Search work together
+- **Custom evaluators**: LLM-as-judge evaluators that score response quality and tool usage
+- **Online evaluations**: Continuous monitoring with configurable sampling rates
+--- CELL 1 ---
+## Catch-up
+
+Ensure all prerequisites from earlier modules are in place.
+--- CELL 3 ---
+## How observability has been working behind the scenes
+
+Every deploy and resource creation in this workshop has included observability configuration. Here's what was set up:
+
+### Agent tracing (Modules 2-6)
+
+Every time you deployed Aria, the deployment helper:
+1. Included `aws-opentelemetry-distro` in the agent package
+2. Wrapped the entrypoint with `opentelemetry-instrument` to auto-instrument HTTP calls, LLM invocations, and tool calls
+3. Set `tracingConfiguration={"enabled": True}` on the Runtime
+
+This means every agent invocation you've run -- from simple conversations in Module 2 to policy-enforced Gateway calls in Module 6 -- has been producing trace data.
+
+### Resource-level tracing (Modules 4-5)
+
+In Modules 4 and 5, you enabled **Tracing** on the Memory and Gateway resources through the AgentCore console. This populates the **Memory** and **Gateways** tabs in the AgentCore Observability dashboard with detailed spans for each operation.
+
+### Service-vended metrics (automatic)
+
+AgentCore automatically emits CloudWatch metrics for every resource -- invocations, latency, errors, throttles, CPU/memory usage. These appear with **zero configuration** in the `Bedrock-AgentCore` namespace.
+
+### Trace flow
+
+![Trace Flow](../shared/img/trace-flow.drawio.png)
+
+> **Documentation:** [AgentCore Observability](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability.html)
+--- CELL 4 ---
+To see the full agent code, open [agent/main.py](agent/main.py) in a new tab.
+--- CELL 6 ---
+## Explore existing traces
+
+You already have trace data in CloudWatch from every agent invocation across Modules 2-6. Let's also generate a few more targeted prompts that exercise different capabilities, then explore everything in the dashboard.
+--- CELL 12 ---
+## Viewing traces in CloudWatch
+
+Open the **CloudWatch Console** and navigate to **Application Signals** > **GenAI Observability** > **Bedrock AgentCore**. You'll see tabs for each resource type:
+
+### Agents tab
+Shows all agent invocations with trace details. Click any trace to see the full waterfall:
+- **Root span**: The full invocation (request to response)
+- **LLM spans**: Each call to the foundation model (with token counts and latency)
+- **Tool spans**: Each tool invocation (code interpreter, browser, Gateway tools)
+- **Memory spans**: Retrieval and storage operations
+- **Gateway spans**: MCP requests to the Gateway (including policy evaluation results)
+
+### Memory tab
+Shows Memory resource metrics and (with tracing enabled) detailed spans for:
+- `CreateEvent`, `RetrieveMemoryRecords`, `ListMemoryRecords`
+- Extraction processing (new memory formation from events)
+- Consolidation processing (merging with existing memories)
+
+### Built-in Tools tab
+Shows Code Interpreter and Browser metrics:
+- Invocation counts, latency, errors
+- CPU and memory usage per tool session
+
+### Gateways tab
+Shows Gateway metrics and spans for:
+- `List Tools`, `Call Tool`, `Search Tools` operations
+- Policy evaluation results (allow/deny decisions, determining policies)
+- Target execution time (how long the backend API took)
+
+### Other views
+- **X-Ray traces** > **Service map**: Visualize the dependency graph between Runtime, LLM, tools, Memory, and Gateway
+- **CloudWatch Logs Insights**: Query structured trace data
+
+> **Tip:** You should see traces spanning the entire workshop -- from simple Module 2 conversations through to the policy-enforced Gateway calls in Module 6. The richer your earlier exploration, the more data you have here.
+--- CELL 13 ---
+## Custom Evaluators
+
+Observability tells you *what* the agent did. **Evaluations** tell you *how well* it did.
+
+An evaluator is an LLM-as-judge that scores your agent's behavior. You define:
+- **Rating scale** (e.g., 1-5)
+- **Instructions** -- a rubric the judge follows
+- **Evaluation level** -- SESSION (whole conversation) or TRACE (individual turn)
+
+| Concept | Description |
+|---|---|
+| **Evaluator** | A custom rubric that defines how to score agent behavior |
+| **Evaluation level** | **SESSION** evaluates the full conversation. **TRACE** evaluates individual tool calls |
+| **Online evaluation** | An evaluator attached to a live agent with a sampling rate |
+| **Sampling rate** | Percentage of invocations to evaluate (e.g., 10%). Controls cost and coverage |
+
+> **Docs**: [AgentCore Evaluations](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/evaluations.html)
+--- CELL 14 ---
+### Create Evaluator 1: ResponseQuality (SESSION level)
+
+This evaluator examines the full conversation session and scores on a 1-5 scale. We use the **control plane** client (`bedrock-agentcore-control`) to create evaluators.
+
+The evaluator config uses the `llmAsAJudge` structure with:
+- **Instructions** containing placeholders that get filled with trace data
+- **Rating scale** with numerical values, labels, and definitions
+- **Model config** specifying which foundation model acts as the judge
+--- CELL 16 ---
+### Create Evaluator 2: ToolUsage (TRACE level)
+
+This evaluator examines individual tool calls within a trace and scores whether the agent selected the right tools and used them efficiently.
+--- CELL 18 ---
+## Set up online evaluation
+
+Online evaluations attach evaluators to a live agent with a **sampling rate**. They run asynchronously -- they do not slow down the agent's responses.
+
+Online evaluations require:
+- A **data source** pointing to the CloudWatch log group that contains the agent's OTel trace data
+- An **execution role** with permissions to read logs and invoke Bedrock models
+- **Evaluator references** -- either built-in or custom evaluators
+
+AgentCore provides several built-in evaluators:
+
+| Evaluator | Level | What it measures |
+|---|---|---|
+| `Builtin.Helpfulness` | TRACE | How helpful the agent's responses are |
+| `Builtin.GoalSuccessRate` | SESSION | Whether the agent achieved the user's goal |
+| `Builtin.Correctness` | TRACE | Factual accuracy of responses |
+| `Builtin.Conciseness` | TRACE | Whether responses are appropriately concise |
+| `Builtin.ToolSelectionAccuracy` | TOOL_CALL | Whether the agent chose the right tools |
+
+Below we use the `create_online_evaluation_config` control-plane API to wire up two built-in evaluators to Aria's trace log group. We set the sampling rate to 100% so that evaluation results appear quickly during the workshop. In production, you would typically use a lower rate (e.g., 10%) to control cost.
+--- CELL 21 ---
+### Save configuration
+--- CELL 23 ---
+---
+
+## Run on-demand evaluation with custom evaluators
+
+The custom evaluators we created (ResponseQuality and ToolUsage) are not wired to online evaluation -- they are designed for **on-demand** use. On-demand evaluation lets you score a specific session by:
+
+1. **Downloading span logs** from CloudWatch for a given session ID
+2. **Calling the `evaluate()` API** on the data plane with those spans
+
+This is useful for debugging specific conversations, testing evaluator rubrics, and investigating quality issues.
+
+### Step 1: Invoke the agent and capture the session ID
+
+We need a session ID from a recent invocation. Let's run one now and save it.
+--- CELL 25 ---
+### Step 2: Download span logs from CloudWatch
+
+The `evaluate()` API requires the raw span logs as input. We query CloudWatch Logs Insights to download all spans for the session.
+
+> **Note:** It can take 1--2 minutes for spans to appear in CloudWatch after an invocation. If the query returns empty results, wait and re-run this cell.
+--- CELL 27 ---
+### Step 3: Run the custom evaluators
+
+Now we call the `evaluate()` **data plane** API with each custom evaluator. The API sends the span data to the LLM judge, which scores the session according to our rubric.
+
+- **ResponseQuality** (SESSION level) — evaluates the entire conversation
+- **ToolUsage** (TRACE level) — evaluates each individual turn where tools were used
+--- CELL 29 ---
+### How on-demand evaluation works
+
+The flow you just ran:
+
+1. **Invoked the agent** — this generated OpenTelemetry spans that were written to CloudWatch Logs
+2. **Downloaded spans** — queried CloudWatch Logs Insights for all spans matching the session ID, from both the Runtime log group and the `aws/spans` log group
+3. **Called `evaluate()`** — passed the raw span data to the data plane API along with the evaluator ID. The service extracted the relevant context from the spans, filled in the evaluator's template placeholders, and sent everything to the judge model
+4. **Received scores** — the LLM judge returned a numerical score, label, and explanation for each evaluation target (one result for SESSION-level, one per trace for TRACE-level)
+
+On-demand evaluation is ideal for:
+- **Testing evaluator rubrics** before deploying them as online evaluations
+- **Investigating specific sessions** that received low online evaluation scores
+- **Comparing evaluator versions** side by side on the same session data
+--- CELL 30 ---
+## Evaluator design notes
+
+### Custom evaluator levels and placeholders
+
+Each evaluator level requires specific **placeholders** in the instructions. These placeholders are filled in automatically with data from agent traces:
+
+| Level | Required placeholders (at least one) | Best for |
+|---|---|---|
+| **SESSION** | `{context}`, `{available_tools}`, `{actual_tool_trajectory}`, `{expected_tool_trajectory}`, `{assertions}` | Full conversation quality |
+| **TRACE** | `{context}`, `{assistant_turn}`, `{expected_response}` | Individual turn quality |
+| **TOOL_CALL** | *(built-in only)* | Tool selection accuracy |
+
+Placeholders with `expected_` require **reference inputs** (ground truth) and can only be used for **on-demand** evaluation. For **online** evaluation (continuous monitoring), use built-in evaluators or custom evaluators that only reference actual data.
+
+### Rating scale
+
+Each evaluator defines a **numerical rating scale** with labels and definitions. The LLM judge outputs a score with justification. The `evaluatorConfig` uses the `llmAsAJudge` structure:
+
+```python
+evaluatorConfig={
+    "llmAsAJudge": {
+        "instructions": "...",  # Must include at least one placeholder
+        "ratingScale": {
+            "numerical": [
+                {"value": 1, "label": "Poor", "definition": "..."},
+                {"value": 5, "label": "Excellent", "definition": "..."},
+            ]
+        },
+        "modelConfig": {
+            "bedrockEvaluatorModelConfig": {
+                "modelId": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+            }
+        }
+    }
+}
+```
+
+### Online vs on-demand evaluation
+
+| Mode | How it works | When to use |
+|---|---|---|
+| **Online** | Continuously samples live traffic from CloudWatch Logs | Production monitoring |
+| **On-demand** | Evaluates specific traces/sessions by ID | Testing, investigation, debugging |
+
+Online evaluations use the `create_online_evaluation_config` API (control plane) and require an IAM execution role with CloudWatch Logs read permissions and Bedrock model invocation permissions.
+--- CELL 31 ---
+## What's next
+
+All **9 AgentCore services** are now active for Aria:
+
+1. **Runtime** -- Hosts the Strands agent
+2. **Code Interpreter** -- Python execution sandbox
+3. **Browser Tool** -- Web browsing capability
+4. **Memory** -- Short-term and long-term memory (preferences, facts, summaries)
+5. **Gateway** -- MCP protocol bridge to the Task API
+6. **Identity** -- CUSTOM_JWT authentication via Cognito
+7. **Policy** -- Cedar policy enforcement at the Gateway
+8. **Observability** -- Automatic OTel tracing to CloudWatch
+9. **Evaluations** -- LLM-as-judge quality monitoring
+
+In **Module 8**, we review the full architecture, verify all services, and run integration tests across every capability.
+--- CELL 33 ---
+---
+
+**Next up: [Module 8 -- Full Deployment Review](../08-full-deployment/notebook.ipynb)**
+
+
+=== 08-full-deployment ===
+--- CELL 0 ---
+# Module 8: Full Deployment -- The Complete Picture
+
+**Congratulations!** You have built **Aria**, a production AI assistant powered by all 9 Amazon Bedrock AgentCore services. This module reviews the full architecture, verifies every service is active, runs integration tests, and provides cleanup instructions.
+--- CELL 1 ---
+## Architecture review
+
+Here is the complete architecture you have built across Modules 2-8:
+
+![Overview](../shared/img/08.drawio.png)
+
+### The 9 AgentCore services + frontend
+
+| # | Service | Module | Role |
+|---|---|---|---|
+| 1 | **Runtime** | 02 | Hosts the Strands agent, manages invocations and lifecycle |
+| 2 | **Code Interpreter** | 03 | Sandboxed Python execution for calculations and data analysis |
+| 3 | **Browser Tool** | 03 | Web browsing for current information retrieval |
+| 4 | **Memory** | 04 | Short-term (session events) and long-term (preferences, facts, summaries) memory |
+| 5 | **Gateway** | 05 | MCP protocol bridge connecting the agent to external APIs |
+| 6 | **Identity** | 05 | CUSTOM_JWT authentication forwarding user identity through the stack |
+| 7 | **Policy** | 06 | Cedar policy enforcement — deterministic guardrails at the Gateway |
+| 8 | **Observability** | 07 | OpenTelemetry tracing to CloudWatch (ADOT SDK + explicit enablement) |
+| 9 | **Evaluations** | 07 | LLM-as-judge quality monitoring with custom rubrics |
+| -- | **Frontend** | 08 | Web app with streaming chat, sessions, and Cognito auth |
+--- CELL 2 ---
+## Setup
+--- CELL 4 ---
+## Verify all services
+
+Let's confirm that every AgentCore resource is active and properly configured using raw boto3 calls.
+--- CELL 10 ---
+## Deploy the frontend web application
+
+Now let's deploy a web application so you can interact with Aria through a browser.
+
+The frontend infrastructure (API Gateway, Lambda functions, S3 bucket, CloudFront distribution, DynamoDB sessions table) was **pre-provisioned** by the workshop CloudFormation template. The deploy script wires it all up with the AgentCore resources you created in Modules 2-7:
+
+1. **Configures the Runtime for OAuth** — enables direct HTTPS calls with a Cognito JWT
+2. **Adds the POST /chat endpoint** to the pre-provisioned API Gateway, pointing to the Runtime
+3. **Updates the history Lambda** with the Memory ID for conversation history retrieval
+4. **Uploads frontend files** to S3 with a generated `config.js` containing all endpoints
+5. **Invalidates the CloudFront cache** so the new files are served immediately
+--- CELL 12 ---
+## Access the web application
+
+The frontend is now live. Open the CloudFront URL below in your browser and log in with the workshop credentials:
+
+- **Username:** `workshop@example.com`
+- **Password:** `WorkshopPass123!`
+
+Try these conversations to exercise all of Aria's capabilities:
+1. **"Remember that my favorite programming language is Python"** -- tests Memory
+2. **"Calculate the first 20 Fibonacci numbers"** -- tests Code Interpreter
+3. **"Create a task: Review the AgentCore documentation"** -- tests Gateway + Policy
+4. **"What's the latest news about AWS re:Invent?"** -- tests Browser Tool
+5. **Start a new session and ask "What's my favorite programming language?"** -- tests cross-session Memory
+--- CELL 14 ---
+## What you have learned
+
+Across this workshop, you built a production AI assistant from scratch using Amazon Bedrock AgentCore:
+
+| Module | What you did | Key takeaway |
+|---|---|---|
+| **00** | Set up prerequisites | CloudFormation provisions IAM roles, S3 bucket, Cognito, Task API |
+| **01** | Explored the CLI | `agentcore` CLI for local development and testing |
+| **02** | Created Runtime | Deployed a Strands agent to AgentCore Runtime |
+| **03** | Added Tools | Code Interpreter and Browser Tool -- zero infrastructure |
+| **04** | Added Memory | Session summaries, user preferences, and semantic facts |
+| **05** | Added Gateway + Identity | MCP bridge to REST APIs with JWT authentication |
+| **06** | Added Cedar Policies | Deterministic guardrails that enforce business rules |
+| **07** | Added Observability + Evaluations | Auto-tracing and LLM-as-judge quality monitoring |
+| **08** | Deployed the web app | Full frontend with streaming chat, sessions, and Cognito auth |
+
+The key architectural insight: each AgentCore service handles one concern, and they compose together cleanly. The agent code itself (Aria) stays simple -- it is a Strands agent with a system prompt and tools. All the production infrastructure (auth, policies, tracing, evaluation) lives in the AgentCore platform layer.
+
+The frontend connects to AgentCore Runtime through an API Gateway streaming proxy. The user's Cognito JWT flows through the entire stack: API Gateway validates it, the Runtime receives it, and the Gateway forwards it to downstream tools. Cedar policies enforce business rules at the Gateway layer without any changes to the agent code.
+--- CELL 15 ---
+## Cleanup
+
+When you are done with the workshop, run the cleanup cell below to delete all AgentCore resources (Runtime, Memory, Gateway, Policy Engine).
+
+> **Workshop Studio note:** If you are running this in an AWS Workshop Studio environment, the CloudFormation stack (IAM roles, Cognito, Task API, frontend infrastructure) will be **cleaned up automatically** when your workshop session expires. You only need to delete the AgentCore resources created during the workshop.
+
+For self-hosted environments, you will also need to delete the CloudFormation stacks (`cfn-template` and `code-editor`) manually from the CloudFormation console.
+--- CELL 17 ---
+## Next steps
+
+Now that you have built a complete AgentCore application, here are some directions to explore:
+
+- **Add more Gateway targets**: Connect additional APIs (calendar, email, CRM) as MCP targets
+- **Refine Cedar policies**: Add per-user or per-role policies using JWT claims as Cedar principals
+- **Custom evaluators**: Create domain-specific evaluators for your use case (compliance, tone, safety)
+- **Multi-agent architectures**: Use AgentCore Gateway to connect multiple agents together
+- **Production deployment**: Set up CI/CD pipelines for agent code updates using `deploy_agent.deploy()`
+
+### Resources
+
+- [Amazon Bedrock AgentCore Documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html)
+- [Strands Agents SDK](https://github.com/strands-agents/sdk-python)
+- [Cedar Language Reference](https://docs.cedarpolicy.com/)
+- [AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agents-tools-runtime.html)
+- [AgentCore Gateway](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html)
+- [AgentCore Memory](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html)
+- [AgentCore Policy](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy.html)
+- [AgentCore Observability](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability.html)
+- [AgentCore Evaluations](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/evaluations.html)
+--- CELL 19 ---
+---
+
+**Congratulations!** You have completed the Amazon Bedrock AgentCore workshop. Aria is a fully production-ready AI assistant with a web frontend, powered by all 9 AgentCore services, authenticated with Cognito, and protected by Cedar policies.
+
+
+=== 99-admin ===
+--- CELL 0 ---
+# Admin Tools
+
+Emergency cleanup cells for deleting AgentCore resources created by workshop notebooks.
+Run individual cells to delete specific resources, or run **Delete All** at the bottom to nuke everything.
+
+> **Warning:** These operations are destructive and cannot be undone. You will need to re-run the relevant module notebooks to recreate deleted resources.
+--- CELL 2 ---
+---
+## 1. Delete Agent Runtime
+
+Deletes the `aria_agent` runtime. This removes the deployed agent and all its sessions.
+--- CELL 4 ---
+---
+## 2. Delete Memory
+
+Deletes the `AriaMemory` resource and all stored conversation data.
+--- CELL 6 ---
+---
+## 3. Delete Gateway
+
+Deletes the `aria-gateway` and all its targets (e.g., the Task API target).
+--- CELL 8 ---
+---
+## 4. Delete Policy Engine
+
+Deletes the `aria-policy-engine` and all its Cedar policies.
+--- CELL 10 ---
+---
+## 5. Delete All
+
+Runs all cleanup steps above in the correct order (policy engine first, then gateway, memory, and finally runtime).

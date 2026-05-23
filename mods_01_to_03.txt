@@ -1,0 +1,504 @@
+
+
+=== 01-introduction ===
+--- CELL 0 ---
+# Module 1: Introduction to Amazon Bedrock AgentCore
+
+---
+
+## What is Amazon Bedrock AgentCore?
+
+**Amazon Bedrock AgentCore** is a suite of managed services purpose-built for deploying, securing, and operating AI agents in production. It removes the undifferentiated heavy lifting of agent infrastructure so you can focus on building agent logic.
+
+### Why AgentCore matters
+
+Building a prototype AI agent is easy. Getting one into production is hard. You need to solve for:
+
+- **Hosting & scaling** -- Where does the agent run? How does it scale to thousands of users?
+- **Tool access** -- How does the agent execute code, browse the web, or call APIs safely?
+- **Memory** -- How does the agent remember past conversations and user preferences?
+- **Authentication** -- How do you know who is talking to the agent?
+- **Authorization** -- What is each user allowed to do?
+- **Observability** -- How do you debug failures and monitor quality?
+- **Evaluation** -- How do you know the agent is actually good?
+
+AgentCore provides a managed answer for every one of these challenges.
+--- CELL 1 ---
+---
+
+## The 9 AgentCore Services
+
+AgentCore is composed of 9 services that work together to form a complete agent platform:
+
+### Compute & Tools
+
+| Service | What it does |
+|---------|-------------|
+| **Runtime** | Hosts and scales your agent in a secure, serverless environment. Each session gets its own dedicated microVM with isolated CPU, memory, and filesystem -- so your agent code only handles one session at a time and conversation history is preserved automatically. |
+| **Code Interpreter** | Gives your agent a sandboxed Python execution environment. The agent can write and run code, generate charts, and process files -- all in a secure sandbox. |
+| **Browser Tool** | Gives your agent the ability to browse the web. It can navigate pages, extract content, and interact with web applications. |
+
+### Memory & State
+
+| Service | What it does |
+|---------|-------------|
+| **Memory** | Provides persistent, cross-session memory. The agent remembers past conversations, user preferences, and extracted facts without you managing a database. |
+
+### Security & Access
+
+| Service | What it does |
+|---------|-------------|
+| **Gateway** | A managed MCP gateway that converts your APIs, Lambda functions, and existing services into MCP-compatible tools -- and connects to pre-existing MCP servers -- making them available to AI agents through a secure endpoint. |
+| **Identity** | Integrates with identity providers (like Amazon Cognito) to authenticate end users before they reach your agent. |
+| **Policy** | Enforces fine-grained authorization using [Cedar](https://www.cedarpolicy.com/) policies. Control what each user or group can do -- down to individual tool calls. |
+
+### Quality & Operations
+
+| Service | What it does |
+|---------|-------------|
+| **Observability** | Emits structured traces, metrics, and logs for every agent invocation. Integrates with Amazon CloudWatch for dashboards and alarms. |
+| **Evaluations** | Runs automated quality assessments against your agent using configurable test suites. Validates that your agent meets accuracy, safety, and latency targets. |
+
+### How they fit together
+
+![AgentCore Overview](../shared/img/ac_overviewchart.svg)
+--- CELL 2 ---
+---
+
+## The Strands Agents SDK
+
+AgentCore is **framework-agnostic** -- you can deploy agents built with any framework. However, in this workshop we use the **[Strands Agents SDK](https://strandsagents.com)**, an open-source Python SDK from AWS that is designed to work seamlessly with AgentCore.
+
+Strands provides:
+
+- A simple `Agent` class with built-in tool calling and multi-turn conversation
+- Native integration with AgentCore services (Memory, Code Interpreter, Browser Tool)
+- Automatic trace emission for AgentCore Observability
+- A lightweight, composable architecture
+--- CELL 3 ---
+---
+
+## The AgentCore CLI (FYI)
+
+AgentCore provides a CLI for creating, developing, and deploying agents. The CLI is an npm package (`@aws/agentcore`) that requires **Node.js 20.x or later** and **uv** (for Python agents).
+
+> **Note:** We won't use the CLI in this workshop -- we'll work directly with boto3 so you can see the underlying API calls. But the CLI is useful to know about for when you want to move fast outside of a workshop setting.
+
+### Installing the CLI
+
+On your local machine, you would install it globally via npm:
+
+```bash
+npm install -g @aws/agentcore
+```
+
+### CLI help output
+
+Running `agentcore --help` shows the available commands:
+
+```
+Usage: agentcore [options] [command]
+
+Amazon Bedrock AgentCore CLI
+
+Options:
+  -V, --version       output the version number
+  -h, --help          display help for command
+
+Commands:
+  create [options]    Create a new AgentCore project
+  dev [options]       Start a local development server
+  deploy [options]    Deploy your agent infrastructure to AWS
+  invoke [options]    Invoke your deployed agent
+  add [options]       Add resources to your project
+  remove [options]    Remove resources from your project
+  help [command]      display help for command
+```
+
+### Key CLI commands
+
+The CLI organizes around a simple project lifecycle:
+
+| Command | Description |
+|---------|-------------|
+| `agentcore create` | Create a new AgentCore project (a wizard guides you through agent setup) |
+| `agentcore dev` | Start a local development server to test your agent |
+| `agentcore deploy` | Deploy your agent infrastructure to AWS |
+| `agentcore invoke` | Invoke your deployed agent |
+| `agentcore add` | Add resources (agents, memory, identity, evaluators, targets) |
+| `agentcore remove` | Remove resources from the project |
+
+### Example: Creating a project
+
+Running `agentcore create` walks you through an interactive wizard:
+
+```
+$ agentcore create
+
+? Project name: my-agent
+? Select agent framework: Strands Agents
+? Select model: Claude Sonnet
+? Add tools? Yes
+? Select tools: Code Interpreter, Memory
+
+Creating project my-agent...
+✔ Project created successfully!
+
+Next steps:
+  cd my-agent
+  agentcore dev     # start local development
+  agentcore deploy  # deploy to AWS
+```
+
+Since this workshop focuses on understanding the underlying APIs, we use boto3 directly in the modules that follow. This gives you full visibility into the API calls, parameters, and response structures that the CLI abstracts away.
+--- CELL 4 ---
+---
+
+## AWS SDKs and the Workshop Approach
+
+AgentCore resources can be managed through three interfaces:
+
+1. **AgentCore CLI** (`agentcore`) — Quick commands for listing, deploying, and testing from the terminal
+2. **AWS CDK** — Infrastructure as Code for production deployments
+3. **AWS SDKs** (e.g., `boto3` for Python) — Programmatic access to all AgentCore APIs
+
+In this workshop, we primarily use **boto3** because:
+- You see the exact API calls that create and manage AgentCore resources
+- You understand the parameters, configurations, and response structures
+- The same calls work in your production code
+
+### Helper functions
+
+We provide a `shared/` utilities directory with helper functions for:
+- **`ensure_ready(module)`** — Smart catch-up script. Checks what exists, creates what's missing. Run this at the start of any module to guarantee prerequisites are in place (even if you skipped modules or broke something).
+- **`deploy_agent.deploy()`** — Packages agent code into a zip, uploads to S3, and creates/updates the Runtime. We hide this because the packaging boilerplate isn't the learning objective.
+- **`progress.show()`** — Visual progress tracker.
+
+**What we DON'T hide:** The actual AgentCore API calls for creating resources (Memory, Gateway, Policy, Evaluators) and invoking agents. These are the concepts you need to understand, so you'll see them as raw boto3 calls.
+--- CELL 6 ---
+---
+
+## The Journey Ahead
+
+Here is what you will build in each remaining module:
+
+### Module 2: Deploy Your First Agent to Runtime
+Build Aria as a Strands agent and deploy it to AgentCore Runtime. By the end of this module, Aria will be running as a managed, scalable endpoint that you can invoke via the CLI and SDK.
+
+### Module 3: Add Code Interpreter & Browser Tools
+Give Aria superpowers. With Code Interpreter, she can write and execute Python code, generate visualizations, and process files. With Browser Tool, she can navigate the web to research topics and extract information.
+
+### Module 4: Add Persistent Memory
+Enable Aria to remember. Using AgentCore Memory, Aria will retain context across sessions -- remembering user preferences, past conversations, and extracted facts.
+
+### Module 5: Connect Gateway & Identity
+Give Aria access to external APIs. AgentCore Gateway is a managed MCP gateway that converts the Task Management REST API into MCP-compatible tools the agent can call. Identity integration with Amazon Cognito ensures every user's JWT flows through the stack so their data stays private.
+
+### Module 6: Enforce Cedar Policies
+Add fine-grained authorization. Using Cedar policies through AgentCore Policy, you will control exactly what each user is allowed to do -- down to individual tool calls and data access.
+
+### Module 7: Observability & Evaluations
+Make Aria observable and testable. AgentCore Observability gives you structured traces and metrics for every invocation. Evaluations let you run automated quality checks to ensure Aria meets your standards.
+
+### Module 8: Full Production Deployment
+Bring it all together. Deploy the complete, production-ready version of Aria with all 9 AgentCore services wired up and working in concert.
+--- CELL 7 ---
+---
+
+## Key Documentation Links
+
+Keep these bookmarked -- you will reference them throughout the workshop:
+
+- **Amazon Bedrock AgentCore**: [https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html)
+- **AgentCore Runtime**: [https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agents-tools-runtime.html](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agents-tools-runtime.html)
+- **Strands Agents SDK**: [https://strandsagents.com](https://strandsagents.com)
+- **Cedar Policy Language**: [https://www.cedarpolicy.com](https://www.cedarpolicy.com)
+--- CELL 8 ---
+---
+
+## Mark Module Complete
+--- CELL 10 ---
+---
+
+**Next up: [Module 2 -- Deploy Your First Agent to Runtime](../02-runtime/notebook.ipynb)**
+
+
+=== 02-runtime ===
+--- CELL 0 ---
+# Module 2: AgentCore Runtime — Your First Deployed Agent
+
+![Overview](../shared/img/02.drawio.png)
+
+In this module, you will deploy Aria as a live agent running on **Amazon Bedrock AgentCore Runtime**.
+
+## What you'll learn
+
+- **AgentCore Runtime** — the managed compute layer that hosts, scales, and versions your agents
+- **How agent code is packaged and deployed** — from a local directory to a running container in the cloud
+- **The streaming invocation model** — how requests flow from client to agent and back as a stream of events
+
+By the end of this module Aria will be live and responding to prompts, though she won't yet have any tools or memory.
+--- CELL 1 ---
+---
+## Catch up
+
+The cell below ensures all prerequisites and prior module outputs are in place. If you are jumping into this module directly, it will run any setup needed from earlier modules.
+--- CELL 3 ---
+---
+## Explore the agent code
+
+The agent lives in `agent/main.py`. Before deploying it, let's understand the key pieces.
+
+### BedrockAgentCoreApp
+
+Every AgentCore agent starts with a **`BedrockAgentCoreApp`** instance. This is the framework's entry point — it handles the HTTP lifecycle, health checks, and communication with the Runtime control plane.
+
+### The `@app.entrypoint` decorator
+
+You register your agent logic with `@app.entrypoint`. The decorated function receives:
+- **`payload`** — the incoming request (contains the user message, session info, etc.)
+- **`context`** — optional metadata about the invocation
+
+### Async streaming pattern
+
+The entrypoint is an **async generator**. Instead of returning a single response, it **yields events** as the agent thinks and responds. This gives the caller real-time streaming output — the same experience you get in the Bedrock console.
+
+### What does Runtime actually do?
+
+When you deploy to AgentCore Runtime, the service:
+1. **Packages** your code into a container image
+2. **Provisions** a dedicated **microVM for each session** — complete isolation of CPU, memory, and filesystem
+3. **Scales** automatically based on traffic — including scaling to zero when idle
+4. **Versions** each deployment so you can roll back if needed
+
+### Session isolation — the key insight
+
+This is one of Runtime's most important features: **each session gets its own microVM**. Your agent code only ever handles one session at a time. This means:
+
+- **No multi-session management** — you don't need a session-keyed cache or routing logic. Just create your Agent object and reuse it across invocations.
+- **Conversation history is automatic** — the Strands Agent keeps its message list in memory, and since the microVM persists between invocations (up to 8 hours), follow-up messages in the same session see the full conversation history.
+- **True isolation** — one user's session can never access another user's data. After a session ends, the entire microVM is terminated and memory is sanitized.
+
+This is why the agent code is so simple — Runtime handles the hard infrastructure problems so your agent code can focus on logic.
+--- CELL 4 ---
+To see the full agent code, open [agent/main.py](agent/main.py) in a new tab.
+--- CELL 5 ---
+The agent's Python dependencies are listed in [agent/requirements.txt](agent/requirements.txt).
+--- CELL 6 ---
+---
+## Deploy the agent
+
+Deployment follows a straightforward pipeline:
+
+1. **CodeZip packaging** — your agent directory is zipped into a deployment artifact
+2. **S3 upload** — the artifact is uploaded to the workshop's S3 bucket
+3. **Runtime creation** — AgentCore pulls the artifact, builds a container, and starts the agent
+4. **READY state** — the agent is live and accepting invocations
+
+The `deploy_agent` helper handles all of this in a single call.
+
+> **Other deployment options:** In this workshop we use a Python helper that calls the AgentCore control-plane API directly. You can also deploy agents using the [AgentCore CLI](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-get-started-toolkit.html), [AWS CDK](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agents-tools-runtime.html), or the [AWS Management Console](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agents-tools-runtime.html). See the [AgentCore Runtime documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agents-tools-runtime.html) for details on each approach.
+--- CELL 8 ---
+---
+## Enable Tracing
+
+Before invoking the agent, enable **Tracing** for the Runtime so that invocation traces flow to CloudWatch and X-Ray. This populates the AgentCore Observability dashboard you will explore in Module 7.
+
+1. Open the **Amazon Bedrock AgentCore** console and navigate to **Runtimes**
+2. Select the **aria_agent** runtime
+3. Scroll down to the **Tracing** section and click **Edit**
+
+![Tracing section](../shared/img/tracing-01.png)
+
+4. Toggle **Enable** on and click **Save**
+
+![Enable tracing](../shared/img/tracing-02.png)
+
+> **Note:** Tracing must be enabled manually per resource. You will repeat this step for Memory and Gateway in later modules.
+--- CELL 9 ---
+---
+## Invoke the agent
+
+Aria is live. Let's call the deployed agent using the boto3 `bedrock-agentcore` data-plane client. This is the raw API call — no helper functions.
+
+You send a JSON payload with a `prompt` key, and the agent streams back a response as **Server-Sent Events (SSE)**. Let's start by looking at the raw response to understand the event format.
+--- CELL 11 ---
+### Understanding the response format
+
+The raw output is a stream of **Server-Sent Events (SSE)**. Each line starting with `data: ` contains a JSON object. The agent's text lives inside a nested path:
+
+```
+event → contentBlockDelta → delta → text
+```
+
+Let's parse this properly to extract just the agent's text:
+--- CELL 13 ---
+---
+## Chat with Aria interactively
+
+Now that you understand the invocation model, let's talk to Aria using an interactive CLI chat client. This is a shared tool you will use throughout the workshop for hands-on testing.
+
+Open a **terminal** in your environment:
+- In VS Code: **Terminal > New Terminal** (or press `` Ctrl+` ``)
+- Navigate to this module's directory
+
+Then run:
+
+```bash
+cd /workshop/02-runtime
+python ../shared/chat.py
+```
+
+Try these prompts to explore what Aria can and cannot do:
+
+1. `Hello! What can you do?`
+2. `What is the square root of 7,293,461?` — she may hallucinate a number rather than calculate it
+3. `What is today's weather in Seattle?` — she has no internet access
+4. `My name is Alex` — then in the same session: `What's my name?` — she remembers within a session (microVM persistence)
+5. Type `new` to start a fresh session, then ask `What's my name?` — she won't remember (no long-term memory yet)
+6. Type `quit` to exit
+
+> **Tip:** The chat client uses the same `invoke_agent_runtime` API call you saw above. It reads config from `shared/.config/` automatically. Later in the workshop, when we add authentication, you can run it with `--auth` to use OAuth/JWT.
+--- CELL 14 ---
+If you tried the prompts above, you will have noticed:
+
+- **No computation** — asking for a square root may produce a hallucinated number rather than a precise calculation.
+- **No live data** — she cannot look up today's weather, stock prices, or news.
+- **No persistent memory** — within a session she remembers (thanks to the microVM), but across sessions she starts fresh every time.
+--- CELL 15 ---
+---
+## What's next
+
+Aria is deployed and responding, but she is limited to what the model already knows. She can't run code, browse the web, or remember past conversations.
+
+In **Module 3: Managed Tools**, we will give Aria two powerful capabilities:
+- **Code Interpreter** — sandboxed Python execution for calculations, data analysis, and chart generation
+- **Browser Tool** — headless Chrome for live web browsing and content extraction
+
+These are managed services provided by AgentCore — no infrastructure for you to maintain.
+--- CELL 16 ---
+---
+## Record progress
+--- CELL 18 ---
+---
+
+**Next up: [Module 3 -- Supercharge Aria with Tools](../03-tools/notebook.ipynb)**
+
+
+=== 03-tools ===
+--- CELL 0 ---
+# Module 3: Managed Tools — Code Interpreter & Browser
+
+![Overview](../shared/img/03.drawio.png)
+
+In this module, you will upgrade Aria with two **AgentCore managed tools** that dramatically expand what she can do.
+
+## What you'll learn
+
+- **AgentCore managed tools** — pre-built, hosted tool services that plug into your agent with a few lines of code
+- **Code Interpreter** — sandboxed Python execution for calculations, data analysis, and chart generation
+- **Browser Tool** — headless Chrome managed by AgentCore for live web browsing and content extraction
+
+By the end of this module Aria will be able to run Python code and browse the internet — with zero infrastructure for you to manage.
+--- CELL 1 ---
+---
+## Catch up
+--- CELL 3 ---
+---
+## What changed from Module 2 to Module 3?
+
+The Module 2 agent was a plain Strands agent with no tools. The Module 3 agent adds two managed tool integrations. Here is what's new:
+
+### Code Interpreter
+
+- Runs Python in a **sandboxed container** managed by AgentCore
+- Supports data analysis, mathematical computation, chart/image generation, and file processing
+- The sandbox has **no internet access** — it cannot fetch URLs or call APIs
+- Ideal for tasks like "calculate compound interest" or "plot a chart of this data"
+
+### Browser Tool
+
+- **Headless Chrome** managed by AgentCore
+- Can navigate to URLs, extract page content, fill forms, and take screenshots
+- Gives your agent real-time access to the web
+- Ideal for tasks like "look up today's Bitcoin price" or "find the latest blog post"
+
+### Both are managed services
+
+You don't provision instances, manage browser binaries, or handle sandbox security. AgentCore runs the infrastructure and exposes each tool as a simple Python object you pass to your `Agent`.
+--- CELL 4 ---
+To see the full agent code, open [agent/main.py](agent/main.py) in a new tab.
+--- CELL 5 ---
+---
+## Deploy the updated agent
+
+We'll deploy the updated agent to the same runtime. AgentCore handles the versioned rollout.
+--- CELL 7 ---
+---
+## Enable Tracing for Code Interpreter and Browser Tool
+
+Enable **Tracing** on both managed tools so that tool invocations appear in the AgentCore Observability dashboard.
+
+### Code Interpreter
+
+1. Open the **Amazon Bedrock AgentCore** console and navigate to **Built-in tools** > **Code Interpreter**
+2. Scroll down to the **Tracing** section and click **Edit**
+
+![Tracing section](../shared/img/tracing-01.png)
+
+3. Toggle **Enable** on and click **Save**
+
+![Enable tracing](../shared/img/tracing-02.png)
+
+### Browser Tool
+
+1. Navigate to **Built-in tools** > **Browser**
+2. Scroll down to the **Tracing** section and click **Edit**
+3. Toggle **Enable** on and click **Save**
+--- CELL 8 ---
+---
+## Set up the invocation client
+
+We'll create the boto3 client and a thin local wrapper that keeps the notebook cells clean. The wrapper is defined right here — not hidden in a helper module — so you can see the full `invoke_agent_runtime` call.
+--- CELL 10 ---
+---
+## Test Code Interpreter
+
+In Module 2, Aria could only answer from her training data. Now she can **write and execute Python code** to give precise, verifiable answers.
+
+### Compound interest calculation
+
+This is a great test because the answer requires real math — not pattern matching.
+--- CELL 12 ---
+---
+## Test Browser Tool
+
+The browser tool gives Aria access to live information on the web. Let's try a query that requires real-time data.
+
+### Live data lookup
+--- CELL 14 ---
+---
+## Go deeper
+
+To learn more about the managed tools used in this module:
+
+- **Code Interpreter:** [AgentCore Code Interpreter documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/code-interpreter-tool.html) — includes file I/O (reading/writing files in the sandbox), supported libraries, and resource limits
+- **Browser Tool:** [AgentCore Browser documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/browser-tool.html) — includes browser profiles for persistent cookies/sessions, navigation strategies, and content extraction modes
+- **Strands tools integration:** [Strands Agents SDK — Tools](https://github.com/strands-agents/sdk-python) — how managed tools plug into the Strands agent framework
+--- CELL 15 ---
+---
+## What's next
+
+Aria now has serious capabilities — she can compute, visualize data, and browse the live web. But every conversation still starts from scratch. She has no idea who you are or what you discussed five minutes ago.
+
+In **Module 4: Memory**, we will give Aria persistent memory so she can:
+- Remember facts across sessions ("My name is Alice and I work on the payments team")
+- Build up context over time
+- Deliver a personalized experience that improves with every interaction
+--- CELL 16 ---
+---
+## Record progress
+--- CELL 18 ---
+---
+
+**Next up: [Module 4 -- Give Aria Persistent Memory](../04-memory/notebook.ipynb)**

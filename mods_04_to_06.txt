@@ -1,0 +1,509 @@
+
+
+=== 04-memory ===
+--- CELL 0 ---
+# Module 4: AgentCore Memory -- Persistent Context
+
+![Overview](../shared/img/04.drawio.png)
+
+In this module you will give Aria a **memory** so she can remember who you are across conversations.
+
+---
+
+### What you will learn
+
+| Topic | Details |
+|---|---|
+| **AgentCore Memory service** | The managed memory layer that ships with Bedrock AgentCore |
+| **Short-term vs. long-term memory** | How STM (conversation buffer) and LTM (extracted knowledge) work together |
+| **LTM extraction strategies** | Session summaries, user preferences, and semantic facts |
+| **Strands integration** | How `AgentCoreMemorySessionManager` plugs into a Strands agent |
+--- CELL 1 ---
+## Catch-up
+
+The cell below checks that every resource from previous modules is in place. If you skipped a module or something broke, it will fix things automatically.
+--- CELL 3 ---
+---
+
+## Understanding Memory
+
+AgentCore Memory gives your agent the ability to **remember** information across sessions. It operates on two tiers:
+
+### Short-term memory (STM)
+
+When your agent sends conversation events to AgentCore Memory, the service stores them as **events**. These events capture each turn of the conversation. Your agent can retrieve these events to rehydrate its conversation history — useful if you want to resume a session later or carry on where you left off. Sending events to Memory is also what triggers the extraction of long-term memories (see below).
+
+### Long-term memory (LTM)
+
+Extracted knowledge that **persists across sessions**. As conversation events are sent to Memory during a session, the service runs extraction strategies in the background to distill the dialogue into durable knowledge. This extraction typically takes around a minute. The extracted memories can be retrieved within the same conversation if it runs long enough, but the primary purpose is to provide context in **future sessions**. When a new session starts, relevant LTM is retrieved and injected into the agent's context.
+
+AgentCore Memory supports three LTM extraction strategies:
+
+| Strategy | Class | Namespace | Purpose |
+|---|---|---|---|
+| **Session Summarizer** | `summaryMemoryStrategy` | `/summaries/{actorId}/{sessionId}` | Creates a concise summary of the conversation so future sessions can quickly recall what was discussed |
+| **Preference Learner** | `userPreferenceMemoryStrategy` | `/preferences/{actorId}` | Detects and stores user preferences (e.g., "I prefer Python over Java") |
+| **Fact Extractor** | `semanticMemoryStrategy` | `/facts/{actorId}` | Extracts factual statements (e.g., "I work at Acme Corp", "My name is Alex") |
+
+Each strategy writes to its own **namespace** and the `{actorId}` placeholder is replaced at runtime with the authenticated user's identity, keeping each user's memories isolated.
+
+> **Documentation:** [AgentCore Memory](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html)
+--- CELL 4 ---
+---
+
+### Create the Memory resource
+
+The `create_memory` API provisions a **memory resource** — think of it as creating a place where memories will be stored, not creating an actual memory of a fact. The memory resource is essentially a managed data store backed by DynamoDB.
+
+You _can_ set up a memory resource without any LTM strategies at all. In that case, it simply stores conversation events (acting as a wrapper for DynamoDB). LTM strategies are optional add-ons that extract knowledge from those stored events.
+
+Here we configure all three strategies so Aria gets the full memory experience:
+- **SessionSummarizer** — Summarizes conversations when a session ends
+- **PreferenceLearner** — Extracts user preferences ("I prefer dark mode")
+- **FactExtractor** — Stores semantic facts ("Alex is a software engineer")
+
+Each strategy has:
+- A **name** and **description** for identification
+- **Namespaces** — template paths that scope stored memories (e.g., per user, per session)
+--- CELL 6 ---
+### Wait for the Memory resource to become ACTIVE
+
+Memory creation is asynchronous. We poll until the status reaches `ACTIVE`.
+--- CELL 8 ---
+### Save the Memory ID for later modules
+
+We persist the memory ID to the shared config directory so that `ensure_ready()` and deployment helpers can find it in subsequent modules.
+--- CELL 10 ---
+---
+## Enable Tracing for Memory
+
+Enable **Tracing** on the Memory resource so that memory operations (store, retrieve, extraction) appear in the AgentCore Observability dashboard.
+
+1. Open the **Amazon Bedrock AgentCore** console and navigate to **Memory**
+2. Select the **AriaMemory** resource
+3. Scroll down to the **Tracing** section and click **Edit**
+
+![Tracing section](../shared/img/tracing-01.png)
+
+4. Toggle **Enable** on and click **Save**
+
+![Enable tracing](../shared/img/tracing-02.png)
+--- CELL 11 ---
+To see the full agent code, open [agent/main.py](agent/main.py) in a new tab.
+--- CELL 12 ---
+---
+
+## Deploy with Memory
+
+We redeploy Aria with the `MEMORY_ID` environment variable pointing to the Memory resource we just created. The runtime will pick up the new agent code **and** the memory configuration.
+--- CELL 14 ---
+---
+
+## Test Memory: Conversation 1
+
+Let's have a conversation where we tell Aria some facts and preferences. Both messages use the **same session ID** so they share the conversation buffer (STM).
+
+### Tell Aria about yourself
+--- CELL 16 ---
+### Same session -- STM recall (conversation buffer)
+
+Aria should recall your name and preferences because the first message is still in the conversation buffer.
+--- CELL 18 ---
+---
+
+## Test Memory: New session (LTM recall)
+
+Now we start a **brand-new session**. The conversation buffer is empty, so Aria can only recall facts if the LTM extraction strategies have processed the previous conversation and stored your preferences and facts.
+
+> **Note:** LTM extraction happens in the background as conversation events are sent to Memory. It typically takes around a minute for memories to be formed and saved. If the new session returns no memories, wait 30--60 seconds and try again.
+--- CELL 20 ---
+If everything is working, Aria should recall that your name is Alex, that you are a software engineer, and that you prefer Python over Java -- even though this is a completely new session.
+
+---
+
+## How it works
+
+Here is the end-to-end flow:
+
+- The session starts, or restarts. AgentCoreMemorySessionManager retrieves message events if they exist for this session. 
+- User enters a message. 
+- AgentCoreMemorySessionManager performs a LTM query of AgentCore Memory and returns semantically related memories. They get prepended to message before sending to agentic loop.
+- Agent processes messages.
+- All messages, including generated messages are sent via AgentCoreMemorySessionManager to AgentCore Memory as events.
+- AgentCore Memory runs extraction strategies in the background to distill the conversation into durable knowledge. The extracted memories are stored in the configured namespaces.
+
+The retrieval configs use different thresholds because:
+
+- **Preferences** (`relevance_score=0.7`): Only highly relevant preferences should influence responses
+- **Facts** (`relevance_score=0.3`, `top_k=10`): Cast a wider net to bring in background knowledge
+- **Summaries** (`relevance_score=0.5`): Balance between relevance and coverage of past conversations
+
+> **Go deeper:** [AgentCore Memory documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html) — includes custom memory strategies, memory management APIs, and advanced retrieval configuration
+--- CELL 21 ---
+---
+
+## What's next
+
+Memory gives Aria a brain -- she can remember who you are and what you care about. But right now she can only **chat**. She cannot interact with external systems on your behalf.
+
+In **Module 5: Gateway & Identity**, we will connect Aria to a Task Management API through AgentCore Gateway, and use JWT-based identity so each user's tasks stay private.
+--- CELL 22 ---
+---
+
+## Progress
+--- CELL 24 ---
+---
+
+**Next up: [Module 5 -- Connect Aria to the Gateway](../05-gateway-identity/notebook.ipynb)**
+
+
+=== 05-gateway-identity ===
+--- CELL 0 ---
+# Module 5: Gateway & Identity -- Connecting External APIs
+
+![Overview](../shared/img/05.drawio.png)
+
+In this module you will give Aria the ability to **manage tasks** by connecting her to an external REST API through AgentCore Gateway, with JWT-based identity so every user's data stays private.
+
+---
+
+### What you will learn
+
+| Topic | Details |
+|---|---|
+| **AgentCore Gateway** | An MCP endpoint that routes agent tool requests to backend APIs |
+| **MCP protocol** | How Gateway auto-discovers API structure and exposes it as MCP tools |
+| **Identity & JWT auth** | How `CUSTOM_JWT` auth validates user tokens against Cognito |
+| **End-to-end identity flow** | User JWT flows from Runtime through Gateway to the target API |
+--- CELL 1 ---
+## Catch-up
+
+The cell below ensures all resources from previous modules (Runtime, Memory) are in place.
+--- CELL 3 ---
+---
+
+## Understanding Gateway
+
+AgentCore Gateway is a **managed MCP endpoint** that sits between your agent and backend APIs. Instead of writing custom tool code for every API, you point Gateway at a backend service and it:
+
+1. **Auto-discovers** the API structure (paths, methods, parameters)
+2. **Generates MCP tools** that your agent can call (e.g., `list_tasks`, `create_task`)
+3. **Handles authentication** between the agent and the target API
+4. **Routes requests** to the target using IAM credentials from the Gateway's execution role
+
+### Target types
+
+Gateway supports five types of backend targets:
+
+| Target Type | Description |
+|---|---|
+| **Lambda** | Invoke a Lambda function directly |
+| **API Gateway** | Auto-discover an API Gateway REST API (what we use in this module) |
+| **OpenAPI** | Provide an OpenAPI spec for any HTTP endpoint |
+| **Smithy** | Provide a Smithy model definition |
+| **MCP server** | Connect to another MCP-compatible server |
+
+### Authentication modes
+
+Gateway supports multiple authentication modes for validating inbound requests:
+
+| Auth Mode | Use Case |
+|---|---|
+| `NONE` | Public APIs or development/testing |
+| `CUSTOM_JWT` | User-facing APIs where each request carries a JWT identifying the user |
+| `AWS_IAM` | AWS service-to-service authentication |
+
+In this module we use `CUSTOM_JWT` backed by Amazon Cognito.
+
+> **Note:** This module introduces **JWT-based authentication**. Up to now, all agent invocations used IAM (SigV4) authentication. From this point forward, the agent will validate user identity via JWT tokens — this is what enables per-user isolation in Gateway and (in Module 6) policy enforcement.
+
+> **Documentation:** [AgentCore Gateway](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html)
+--- CELL 4 ---
+---
+
+## Understanding Identity
+
+When you enable `CUSTOM_JWT` authentication on a Gateway, the identity flow works like this:
+
+1. **User authenticates** with Cognito and receives a JWT (ID token)
+2. **Agent Runtime** receives the JWT in the `Authorization` header
+3. **Agent code** forwards the JWT to Gateway via the MCP client
+4. **Gateway validates** the JWT against the Cognito OIDC discovery endpoint
+5. **Gateway calls** the target API using its own IAM role credentials
+
+This means the target API receives requests authenticated by IAM (from the Gateway role), while the Gateway itself knows **who** the user is from the JWT. The agent code also decodes the JWT to extract the `sub` claim as an `actor_id` for Memory namespace isolation.
+
+In **Module 6** we will add Cedar policies to Gateway that use this JWT identity to enforce per-user access control.
+
+> **Documentation:** [AgentCore Identity](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity.html)
+--- CELL 5 ---
+---
+
+## Gather prerequisites
+
+We need several values from the CloudFormation prerequisites stack: the Gateway IAM role, the REST API ID for the Task API, and Cognito details for JWT authentication.
+--- CELL 7 ---
+---
+
+## Create the Gateway
+
+The `create_gateway` API sets up a managed MCP endpoint. We configure:
+- **`protocolType: MCP`** -- the gateway speaks the Model Context Protocol
+- **`authorizerType: CUSTOM_JWT`** -- every request must carry a valid JWT
+- **`discoveryUrl`** -- points to the Cognito OIDC well-known endpoint so Gateway can validate tokens
+- **`allowedAudience`** -- restricts which Cognito app client IDs are accepted
+--- CELL 9 ---
+### Wait for Gateway to become READY
+
+Gateway creation is asynchronous. We poll until the status reaches `READY` and capture the gateway URL.
+--- CELL 11 ---
+---
+
+## Add the Task API target
+
+A Gateway **target** connects the MCP endpoint to a backend API. We point it at the API Gateway REST API from the prerequisites stack.
+
+Key configuration:
+- **`apiGateway`** — tells Gateway to **auto-discover** the REST API structure from the given `restApiId` and `stage`. Gateway inspects the API's resources, methods, and models to generate MCP tools automatically.
+- **`toolOverrides`** — customizes the auto-discovered tools with clearer names and descriptions so the agent understands what each tool does. Without overrides, tool names are generated from HTTP method + path (e.g., `get_tasks`).
+- **`toolFilters`** — restricts which API paths/methods are exposed as tools (defense in depth)
+- **`GATEWAY_IAM_ROLE`** — outbound calls to the target API use the Gateway's IAM role
+--- CELL 13 ---
+### Save Gateway config for later modules
+--- CELL 15 ---
+---
+## Enable Tracing for Gateway
+
+Enable **Tracing** on the Gateway resource so that MCP tool requests and policy evaluations appear in the AgentCore Observability dashboard.
+
+1. Open the **Amazon Bedrock AgentCore** console and navigate to **Gateways**
+2. Select the **aria-gateway** resource
+3. Scroll down to the **Tracing** section and click **Edit**
+
+![Tracing section](../shared/img/tracing-01.png)
+
+4. Toggle **Enable** on and click **Save**
+
+![Enable tracing](../shared/img/tracing-02.png)
+--- CELL 16 ---
+To see the full agent code, open [agent/main.py](agent/main.py) in a new tab.
+--- CELL 17 ---
+---
+
+## Deploy with Gateway
+
+We redeploy Aria with both the `MEMORY_ID` (from Module 4) and the new `GATEWAY_ENDPOINT` environment variables.
+--- CELL 19 ---
+---
+
+## Test Task Management
+
+Now let's use Aria's new task management capabilities. Since Gateway uses `CUSTOM_JWT` auth, we first get a JWT token, then use the shared `test_agent` helper to invoke Aria.
+--- CELL 21 ---
+### List all tasks
+--- CELL 23 ---
+### Mark a task as completed
+--- CELL 25 ---
+### Try it interactively
+
+You can also test Aria with the CLI chat client. Since we now have JWT authentication, use the `--auth` flag:
+
+```bash
+cd /workshop/05-gateway-identity
+python ../shared/chat.py --auth
+```
+
+Try creating, listing, and completing tasks through natural conversation.
+
+> **Documentation:** [Authenticate and authorize with Inbound Auth and Outbound Auth](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity.html)
+--- CELL 26 ---
+---
+
+## What's next
+
+Gateway connects Aria to external APIs with full identity propagation. But right now, **any authenticated user can do anything** -- create tasks, delete tasks, access any endpoint.
+
+In **Module 6: Policy**, we will add **Cedar policies** to Gateway that control exactly which actions each user is permitted to perform.
+--- CELL 27 ---
+---
+
+## Progress
+--- CELL 29 ---
+---
+
+**Next up: [Module 6 -- Enforce Policies with Cedar](../06-policy/notebook.ipynb)**
+
+
+=== 06-policy ===
+--- CELL 0 ---
+# Module 6: Cedar Policies -- Deterministic Guardrails
+
+![Overview](../shared/img/06.drawio.png)
+
+In this module, you will add **Cedar policies** to Aria's Gateway using the AgentCore Policy service. Unlike prompt-based guardrails that rely on the LLM to comply, Cedar policies are **deterministic** -- they evaluate at the Gateway boundary, outside agent code, with 100% reliability.
+
+There is no new agent code for this module. Aria continues to run V4 from Module 5. The focus here is entirely on the policy layer.
+
+## What you will learn
+
+- **AgentCore Policy**: How to create a Policy Engine and attach it to a Gateway
+- **Cedar language**: The `permit(principal, action, resource) when { conditions }` syntax
+- **Deterministic guardrails**: Why policies are more reliable than prompt-based rules
+- **Business rules**: Enforcing that tasks cannot be created with status "completed"
+- **ENFORCE vs LOG_ONLY**: Choosing the right enforcement mode
+--- CELL 1 ---
+## Catch-up
+
+The following cell ensures all prerequisites from earlier modules are in place. If you completed Modules 0-5, this will verify everything. If you skipped ahead, it will create the missing resources automatically.
+--- CELL 3 ---
+## Why deterministic policies?
+
+
+Consider two approaches to enforcing the rule *"users cannot create tasks that are already marked completed"*:
+
+
+| Approach | How it works | Reliability |
+|---|---|---|
+| **Prompt-based** | Add to system prompt: "Never create a task with status completed" | Probabilistic -- the LLM *usually* follows instructions, but can be jailbroken or simply forget |
+| **Cedar policy** | `permit(...) unless { action is create_task and status is completed }` | Deterministic -- the Gateway evaluates the policy *before* the request reaches the API. 100% reliable. |
+
+
+Cedar policies evaluate at the **Gateway boundary**, completely outside the agent's code and the LLM's reasoning loop. The agent never even sees a denied request -- the Gateway blocks it before it reaches the target API.
+
+
+This is the same Cedar language used by [Amazon Verified Permissions](https://aws.amazon.com/verified-permissions/) and is purpose-built for authorization decisions.
+
+
+> **Docs**: [AgentCore Policy](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy.html)
+--- CELL 4 ---
+## Understanding Cedar
+
+Cedar policies follow a **principal / action / resource** model with conditions:
+
+```cedar
+permit(
+  principal,                                                // Who (any authenticated user)
+  action == AgentCore::Action::"TaskApi___create_task",    // What (create task)
+  resource == AgentCore::Gateway::"<gateway-arn>"           // Where (this Gateway)
+) when {
+  !(context.input has status && context.input.status == "completed")
+};
+```
+
+### Key concepts
+
+- **Default deny** -- Cedar denies any request that is not explicitly permitted. Each tool action needs its own `permit` policy.
+- **Actions** are named using the pattern `<target-name>___<tool-name>`, matching the tool names defined in your Gateway target's `toolOverrides`. For our task API: `TaskApi___list_tasks`, `TaskApi___create_task`, `TaskApi___update_task`, `TaskApi___delete_task`
+- **Resource** is the Gateway ARN: `AgentCore::Gateway::"<ARN>"`
+- **Conditions** use `context.input` to inspect the request body fields. Every policy requires a `when` condition that references `context.input` -- the Policy Engine rejects unconditional permits as overly broad.
+- **Sentinel conditions** -- For policies that should allow all requests, use a condition that is always true: `!(context.input has field && context.input.field == "__blocked__")`. This satisfies the validator while never actually blocking anything.
+
+### The business rule
+
+Tasks cannot be CREATED with status "completed". They must start as "pending" or "in_progress" and transition through an update. This enforces a proper task lifecycle.
+
+> **Go deeper:** [Cedar policy language](https://www.cedarpolicy.com/) | [AgentCore Policy](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy.html)
+--- CELL 5 ---
+## Setup
+
+First we connect to the AgentCore control plane and load the Gateway configuration from Module 5.
+--- CELL 7 ---
+## Create the Policy Engine
+
+A Policy Engine is the container that holds Cedar policies and evaluates them against incoming requests. We create one and wait for it to become ACTIVE.
+--- CELL 10 ---
+## Create Cedar policies
+
+Cedar's **default deny** means every tool action needs an explicit permit. We need four policies -- one per Gateway tool:
+
+| Policy | Action | Condition |
+|---|---|---|
+| `permit_list_tasks` | `TaskApi___list_tasks` | Block when `status == "completed"` |
+| `permit_create_task` | `TaskApi___create_task` | Block when `status == "completed"` |
+| `permit_update_task` | `TaskApi___update_task` | Allow all (sentinel condition) |
+| `permit_delete_task` | `TaskApi___delete_task` | Allow all (sentinel condition) |
+
+The `create_task` and `list_tasks` policies enforce the business rule: tasks cannot be created (or filtered) with status "completed". The `update_task` and `delete_task` policies permit all operations.
+
+> **Important:** Every policy requires a `when` condition that references `context.input`. The Policy Engine rejects unconditional permits as overly broad. For policies that should allow all requests, use a sentinel condition that is always true (e.g., `!(context.input has field && context.input.field == "__blocked__")`).
+--- CELL 12 ---
+### NL2Cedar: generating policies from natural language
+
+AgentCore Policy also supports **NL2Cedar** -- an API that translates plain-English descriptions into Cedar policies. Instead of writing Cedar by hand, you describe the intent:
+
+```python
+# Start policy generation from natural language
+control.start_policy_generation(
+    policyEngineId=engine_id,
+    name="gen_refund_limit",
+    resource={"arn": gateway_arn},
+    content={"rawText": "Allow customer service agents to process refunds up to 500 dollars"},
+)
+```
+
+NL2Cedar analyzes the Gateway's tools and input schemas to produce valid Cedar with the right action names and `context.input` conditions. This is particularly useful when policies have complex conditions that are easier to express in natural language than in Cedar syntax.
+
+> **Go deeper:** [NL2Cedar policy generation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy.html)
+--- CELL 13 ---
+## Attach Policy Engine to Gateway
+
+Now we attach the policy engine to the Gateway in **ENFORCE** mode. This means any request that violates a policy will be **denied** -- the agent will receive an error instead of the tool result.
+--- CELL 15 ---
+### Wait for Gateway to update
+--- CELL 17 ---
+### Save configuration
+--- CELL 19 ---
+## Test Cedar policy enforcement
+
+Let's test the policies. We use the shared `test_agent` helper with a JWT token. Each invocation flows through:
+
+```
+test_agent.invoke() --> Runtime --> Agent --> Gateway --> Cedar Policy --> Target API
+```
+--- CELL 21 ---
+### Test 1: Create a task with status "completed" -- should be DENIED
+
+This request explicitly asks to create a task with status "completed". The `permit_create_task` policy blocks this because the condition `!(context.input has status && context.input.status == "completed")` evaluates to false.
+--- CELL 23 ---
+### Test 2: Create a task without specifying status -- should SUCCEED
+
+When no status is specified, the API defaults to "pending". The `permit_create_task` policy allows this because the condition `!(context.input has status && context.input.status == "completed")` evaluates to true (no status field present).
+--- CELL 25 ---
+### Test 3: Update a task status to completed -- should SUCCEED
+
+The `permit_update_task` policy permits all updates unconditionally, including setting status to "completed". The business rule only restricts *creation*, not updates.
+--- CELL 27 ---
+## ENFORCE vs LOG_ONLY
+
+| Mode | Behavior | Use case |
+|---|---|---|
+| **ENFORCE** | Denies requests that violate policies. The agent receives an error. | Production — hard enforcement of business rules |
+| **LOG_ONLY** | Logs policy decisions but allows all requests through. | Testing — verify policies work before enforcing |
+
+In LOG_ONLY mode, the "create task with status completed" request above would succeed, but the policy decision would be logged for review. This is useful when rolling out new policies — start with LOG_ONLY to monitor behavior, then switch to ENFORCE once you are confident.
+
+### Try it interactively
+
+Test the policy enforcement through the CLI chat. Try asking Aria to create a task that is already completed — the policy should block it:
+
+```bash
+cd /workshop/06-policy
+python ../shared/chat.py --auth
+```
+
+Try these prompts:
+1. `Create a task called "finish report" with status completed` — should be denied
+2. `Create a task called "finish report"` — should succeed (defaults to pending)
+3. `Mark the finish report task as completed` — should succeed (updates are allowed)
+
+> **Go deeper:** [AgentCore Policy](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy.html) | [NL2Cedar policy generation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy.html)
+--- CELL 28 ---
+## What's next
+
+Cedar policies now govern Aria's behavior **deterministically** at the Gateway boundary. No matter what prompt injection or jailbreak is attempted, the policy engine will block requests that violate the business rules.
+
+In **Module 7**, we add **observability and evaluations** -- OpenTelemetry tracing for monitoring and custom evaluators that score the agent's performance in production.
+--- CELL 30 ---
+---
+
+**Next up: [Module 7 -- Observability and Evaluations](../07-observability-evaluations/notebook.ipynb)**
