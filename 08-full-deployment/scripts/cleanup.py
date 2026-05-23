@@ -32,7 +32,7 @@ def cleanup(auto_confirm: bool = False) -> None:
     print(f"  Region: {region}")
     print()
 
-    # Gather what exists
+    # Faz um levantamento de tudo que já foi criado na AWS
     resources = []
     runtime_config = utils.load_config("runtime")
     memory_config = utils.load_config("memory")
@@ -68,7 +68,7 @@ def cleanup(auto_confirm: bool = False) -> None:
 
     control_client = boto3.client("bedrock-agentcore-control", region_name=region)
 
-    # Delete in reverse dependency order
+    # Deleta os recursos na ordem inversa de dependência (do último pro primeiro)
     for resource_type, config in resources:
         try:
             if resource_type == "runtime":
@@ -82,7 +82,7 @@ def cleanup(auto_confirm: bool = False) -> None:
         except Exception as e:
             print(f"  ⚠ Error cleaning {resource_type}: {e}")
 
-    # Clean up config files
+    # Limpa os arquivos de configuração locais
     config_dir = utils.CONFIG_DIR
     if config_dir.exists():
         for f in config_dir.glob("*.json"):
@@ -121,7 +121,7 @@ def _delete_policy(client, config: dict) -> None:
 
     print(f"  🗑 Deleting Policy Engine: {engine_id}")
 
-    # Delete policies first
+    # Apaga as políticas Cedar primeiro
     try:
         paginator = client.get_paginator("list_policies")
         for page in paginator.paginate(policyEngineId=engine_id):
@@ -150,7 +150,7 @@ def _delete_gateway(client, config: dict) -> None:
 
     print(f"  🗑 Deleting Gateway: {gateway_id}")
 
-    # Delete targets first
+    # Apaga os targets do gateway primeiro
     try:
         paginator = client.get_paginator("list_gateway_targets")
         for page in paginator.paginate(gatewayIdentifier=gateway_id):

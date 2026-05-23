@@ -38,7 +38,7 @@ def deploy():
     print(f"  Account: {account_id}")
     print()
 
-    # --- Gather configuration ---
+    # --- Carrega as configurações atuais ---
     print("[1/5] Gathering configuration...")
 
     cfn = utils.get_all_cfn_outputs()
@@ -79,7 +79,7 @@ def deploy():
     lam = boto3.client("lambda", region_name=region)
     cf = boto3.client("cloudfront", region_name=region)
 
-    # --- Configure Runtime OAuth ---
+    # --- Configura o OAuth no Runtime ---
     print()
     print("[2/5] Configuring Runtime for OAuth (CUSTOM_JWT)...")
 
@@ -124,7 +124,7 @@ def deploy():
             timeout=120,
         )
 
-    # --- Add POST /chat endpoint ---
+    # --- Adiciona a rota POST /chat ---
     print()
     print("[3/5] Configuring /chat endpoint...")
 
@@ -134,7 +134,7 @@ def deploy():
         f"?qualifier=DEFAULT&accountId={account_id}"
     )
 
-    # Ensure POST method exists on /chat (idempotent)
+    # Garante que o método POST exista na rota /chat
     method_exists = False
     try:
         apigw.get_method(
@@ -160,7 +160,7 @@ def deploy():
             },
         )
 
-    # Ensure integration exists and points to the current runtime (idempotent)
+    # Garante que a integração aponte para o runtime atual
     integration_params = dict(
         restApiId=frontend_api_id,
         resourceId=chat_resource_id,
@@ -197,9 +197,9 @@ def deploy():
         print("  Creating POST /chat integration...")
         apigw.put_integration(**integration_params)
 
-    # Enable streaming: ResponseTransferMode=STREAM ensures API Gateway
-    # forwards response chunks as the agent yields them instead of buffering
-    # the entire response (which would hit the 29s integration timeout).
+    # Habilita o streaming: o 'ResponseTransferMode=STREAM' faz com que o API Gateway
+    # vá enviando os pedaços da resposta assim que o agente gera, ao invés de segurar tudo
+    # e mandar de uma vez (o que causaria timeout de 29s do API Gateway).
     apigw.update_integration(
         restApiId=frontend_api_id,
         resourceId=chat_resource_id,
@@ -210,7 +210,7 @@ def deploy():
     )
     print("  Streaming mode enabled (ResponseTransferMode=STREAM)")
 
-    # Create a new deployment to make changes live
+    # Cria um novo deploy para ativar as mudanças na API
     print("  Deploying API Gateway...")
     apigw.create_deployment(
         restApiId=frontend_api_id,
@@ -219,7 +219,7 @@ def deploy():
     )
     print("  API Gateway deployed")
 
-    # --- Update history Lambda with Memory ID ---
+    # --- Atualiza o Lambda de histórico com o ID da Memória ---
     if memory_id:
         print()
         print("  Updating history Lambda with Memory ID...")
@@ -232,7 +232,7 @@ def deploy():
         except ClientError as e:
             print(f"  Warning: Could not update history Lambda: {e}")
 
-    # --- Upload frontend files + config.js ---
+    # --- Faz o upload dos arquivos do frontend e do config.js ---
     print()
     print("[4/5] Deploying frontend files to S3...")
 
@@ -256,7 +256,7 @@ window.ARIA_CONFIG = {{
 }};
 """
 
-    # Upload frontend files
+    # Sobe os arquivos do frontend pro S3
     content_types = {
         ".html": "text/html",
         ".js": "application/javascript",
@@ -284,7 +284,7 @@ window.ARIA_CONFIG = {{
                 )
             uploaded += 1
 
-    # Upload generated config.js
+    # Sobe o config.js gerado pro S3
     s3.put_object(
         Bucket=frontend_bucket,
         Key="config.js",
@@ -295,7 +295,7 @@ window.ARIA_CONFIG = {{
 
     print(f"  Uploaded {uploaded} files to s3://{frontend_bucket}")
 
-    # --- Invalidate CloudFront ---
+    # --- Invalida o cache do CloudFront para mostrar a versão mais recente ---
     print()
     print("[5/5] Invalidating CloudFront cache...")
 
@@ -312,7 +312,7 @@ window.ARIA_CONFIG = {{
         print(f"  ⚠ Cache invalidation skipped (permission not available): {e.response['Error']['Code']}")
         print("  Files are uploaded — CloudFront will serve them after its default TTL expires.")
 
-    # --- Save config ---
+    # --- Salva as configurações localmente ---
     config = {
         "cloudfront_url": cloudfront_url,
         "api_url": api_url,
@@ -325,7 +325,7 @@ window.ARIA_CONFIG = {{
     }
     utils.save_config("frontend", config)
 
-    # --- Print results ---
+    # --- Mostra os resultados na tela ---
     print()
     utils.print_banner("Deployment Complete")
     print(f"  Frontend URL:  {cloudfront_url}")

@@ -14,17 +14,17 @@ import boto3
 from botocore.exceptions import ClientError
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constantes
 # ---------------------------------------------------------------------------
 
-WORKSHOP_DIR = Path(__file__).resolve().parent.parent  # workshop-code/
+WORKSHOP_DIR = Path(__file__).resolve().parent.parent  # Diretório workshop-code/
 CONFIG_DIR = WORKSHOP_DIR / "shared" / ".config"
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 PROJECT_TAG = "aria-agentcore-workshop"
 
 
 # ---------------------------------------------------------------------------
-# AWS helpers
+# Funções auxiliares para lidar com a AWS
 # ---------------------------------------------------------------------------
 
 
@@ -64,12 +64,12 @@ def get_all_cfn_outputs() -> dict:
     Looks for the workshop prerequisites stack first. Falls back to
     scanning all stacks only if the workshop stack is not found.
     """
-    # Try the workshop stack directly first
+    # Primeiro tentamos procurar direto pelo nome oficial do stack do workshop
     workshop_outputs = get_cfn_outputs("cfn-template")
     if workshop_outputs:
         return workshop_outputs
 
-    # Fallback: scan all stacks (for non-standard stack names)
+    # Se não achar, varremos todas as stacks criadas pra ver se tem alguma com cara de ser a do curso
     cfn = boto3.client("cloudformation", region_name=REGION)
     all_outputs = {}
     try:
@@ -89,7 +89,7 @@ def get_all_cfn_outputs() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Configuration persistence
+# Configuração persistence
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +123,7 @@ def load_config(name: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Gateway config helper
+# Facilitador para pegar as configurações do Gateway
 # ---------------------------------------------------------------------------
 
 
@@ -175,7 +175,7 @@ def get_gateway_config(control_client=None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Polling helper
+# Função auxiliar para fazer polling (ficar perguntando pra AWS se um recurso já terminou de ser criado)
 # ---------------------------------------------------------------------------
 
 
@@ -212,7 +212,7 @@ def poll_until(
     while time.time() - start < timeout:
         response = describe_fn()
 
-        # Navigate the status path
+        # Navega dinamicamente dentro do dicionário de resposta da AWS para achar o status
         status = response
         for key in status_path.split("."):
             status = status[key] if isinstance(status, dict) else status
@@ -239,7 +239,7 @@ def poll_until(
 
 
 # ---------------------------------------------------------------------------
-# SSE response parsing
+# Motor para processar Server-Sent Events (As respostas em pedaços do streaming)
 # ---------------------------------------------------------------------------
 
 
@@ -258,7 +258,7 @@ def stream_sse_response(stream) -> str:
 
     for chunk in stream.iter_chunks(chunk_size=1024):
         buffer += decoder.decode(chunk, final=False)
-        # Process complete lines from the buffer
+        # Pega o que tem de linha completa no buffer de texto e processa
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             line = line.strip()
@@ -293,10 +293,10 @@ def stream_sse_response(stream) -> str:
             except (json.JSONDecodeError, AttributeError):
                 pass
 
-    # Flush any trailing bytes from the incremental decoder
+    # Força qualquer sobra de bytes a ser processada pelo decodificador
     buffer += decoder.decode(b"", final=True)
 
-    # Process any remaining data in the buffer
+    # Tira e processa tudo o que ainda sobrou preso no buffer de memória
     if buffer.strip().startswith("data: "):
         try:
             event = json.loads(buffer.strip()[6:])
@@ -315,7 +315,7 @@ def stream_sse_response(stream) -> str:
         except (json.JSONDecodeError, AttributeError):
             pass
 
-    print()  # trailing newline
+    print()  # Linha em branco
     return full_text
 
 
@@ -337,7 +337,7 @@ def parse_sse_text(raw: str) -> str:
             event = json.loads(line[6:])
             if not isinstance(event, dict):
                 continue
-            # Check for error events first
+            # A primeira coisa é chegar se veio algum alerta de erro da AWS
             if event.get("error"):
                 error_type = event.get("error_type", "Error")
                 error_msg = event["error"]
@@ -346,7 +346,7 @@ def parse_sse_text(raw: str) -> str:
             if event.get("force_stop") and event.get("force_stop_reason"):
                 text += f"\n⚠ Agent stopped: {event['force_stop_reason']}\n"
                 continue
-            # Extract text from content deltas
+            # Vai pegando e juntando só o pedaço da resposta de texto que o modelo gerou e mandou pra gente
             delta = (event.get("event", {})
                          .get("contentBlockDelta", {})
                          .get("delta", {})
@@ -363,7 +363,7 @@ def parse_sse_text(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Display helpers
+# Utilitários para exibir caixas e divisórias bonitinhas no terminal
 # ---------------------------------------------------------------------------
 
 

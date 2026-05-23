@@ -1,89 +1,82 @@
-# Amazon Bedrock AgentCore: Complete Course
+# Curso Prático: Amazon Bedrock AgentCore
 
-Build **Aria**, a production-grade AI assistant using all 9 Amazon Bedrock AgentCore services. By the end of this course, you will have a fully deployed assistant with streaming responses, persistent memory, code execution, web browsing, API integrations, policy enforcement, full observability, and automated quality evaluation.
+Neste laboratório, você vai construir a **Aria**, uma assistente virtual com inteligência artificial pronta para o mundo real, usando os 9 serviços do **Amazon Bedrock AgentCore**. No final deste curso, você terá criado do zero uma assistente hospedada na nuvem que responde em tempo real (streaming), lembra das conversas passadas, executa códigos em Python, navega na web, e se conecta com APIs. Tudo isso enquanto respeita regras rígidas de segurança, gera métricas e é avaliada automaticamente!
 
 ![Aria](images/aria-home.png)
 
-## What you will build
+## O Que Você Vai Construir
 
-**Aria** is a personal AI assistant where users can:
+**Aria** é uma assistente de IA pessoal onde os usuários podem:
 
-- **Log in** via Amazon Cognito OAuth and see their own workspace
-- **Chat** with streaming AI responses in real-time
-- **Execute code** -- ask Aria to run Python for calculations, data analysis, or charting
-- **Browse the web** -- ask Aria to look things up online
-- **Manage tasks** -- Aria connects to a Task Management API through AgentCore Gateway
-- **Remember everything** -- conversations and user preferences persist across sessions via AgentCore Memory
+- **Fazer Login:** Acesso seguro via Amazon Cognito.
+- **Conversar:** Respostas fluidas e rápidas geradas em tempo real.
+- **Rodar Códigos:** Pedir para a Aria executar scripts em Python para fazer cálculos matemáticos, análise de dados ou gerar gráficos.
+- **Navegar na Internet:** A Aria consegue acessar a web e buscar informações recentes para te responder.
+- **Gerenciar Tarefas:** Através do Gateway do AgentCore, a Aria se conecta com a sua API de Gestão de Tarefas.
+- **Lembrar de Tudo:** Graças à Memória do AgentCore, a Aria não esquece das suas preferências e do contexto das conversas passadas.
 
 ![Architecture](images/full-architecture.drawio.png)
 
-## Modules
+## Módulos do Curso
 
-Each module builds on the previous one, progressively adding AgentCore capabilities:
+O curso é totalmente prático e incremental. Cada módulo adiciona novas funcionalidades ao seu agente:
 
-| Module | Title | What you will learn |
+| Módulo | Título | O Que Você Vai Aprender |
 |--------|-------|---------------------|
-| [00](00-prerequisites/) | **Prerequisites** | Deploy foundational AWS infrastructure (Cognito, API Gateway, DynamoDB, IAM) |
-| [01](01-introduction/) | **Introduction & AgentCore CLI** | AgentCore architecture, all 9 services, CLI commands |
-| [02](02-runtime/) | **AgentCore Runtime** | Deploy your agent to Runtime with streaming and auto-scaling |
-| [03](03-tools/) | **AgentCore Tools** | Add Code Interpreter and Browser Tool for code execution and web browsing |
-| [04](04-memory/) | **AgentCore Memory** | Add short-term and long-term memory with 3 extraction strategies |
-| [05](05-gateway-identity/) | **Gateway & Identity** | Connect to APIs via Gateway, configure JWT auth, understand identity flow |
-| [06](06-policy/) | **AgentCore Policy** | Enforce business rules with Cedar policies at the Gateway boundary |
-| [07](07-observability-evaluations/) | **Observability & Evaluations** | Traces, metrics, logs, LLM-as-a-Judge quality monitoring |
-| [08](08-full-deployment/) | **Full Deployment** | Deploy a web frontend, run integration tests, review the full architecture |
+| [00](00-prerequisites/) | **Pré-requisitos** | Como subir a infraestrutura base na AWS (Cognito, API Gateway, DynamoDB). |
+| [01](01-introduction/) | **AgentCore CLI & Introdução** | Entendendo a arquitetura do AgentCore e conhecendo a linha de comando. |
+| [02](02-runtime/) | **AgentCore Runtime** | Colocando o seu agente para rodar na nuvem com auto-scaling e streaming. |
+| [03](03-tools/) | **AgentCore Tools** | Adicionando as ferramentas de Interpretador de Código (Python) e Navegador Web. |
+| [04](04-memory/) | **AgentCore Memory** | Dando memória de curto e longo prazo para a Aria. |
+| [05](05-gateway-identity/) | **Gateway & Identity** | Conectando sua IA com APIs externas e protegendo tudo com autenticação JWT. |
+| [06](06-policy/) | **AgentCore Policy** | Bloqueando acessos indevidos e aplicando regras de negócio usando o Cedar Policy. |
+| [07](07-observability-evaluations/) | **Observabilidade & Avaliações** | Criando painéis de métricas, traces e usando LLMs para dar "notas" de qualidade para o seu agente. |
+| [08](08-full-deployment/) | **Full Deployment** | Subindo a interface Web (Frontend) e vendo o projeto inteiro funcionando junto! |
 
-## Agent versions
+## Versões do Agente
 
-The agent evolves across modules, deploying to the same Runtime (update in place):
+Ao longo dos módulos, nosso agente vai evoluindo na nuvem:
 
-- **V1** (Module 02): Basic chat -- Strands + BedrockModel
-- **V2** (Module 03): + Code Interpreter + Browser
-- **V3** (Module 04): + Memory (3 LTM strategies)
-- **V4** (Module 05): + Gateway MCP client + JWT forwarding
-- **V5** (Module 07): + Production error handling
+- **V1** (Módulo 02): Chat básico -- Só conversa simples usando modelos do Bedrock.
+- **V2** (Módulo 03): V1 + Interpretador de Código + Navegador Web.
+- **V3** (Módulo 04): V2 + Memória persistente.
+- **V4** (Módulo 05): V3 + Conexão com Gateway + Repasse de token JWT.
+- **V5** (Módulo 07): V4 + Tratamento de erros avançado para produção.
 
-## Prerequisites
+## Pré-requisitos
 
-### Tools
-
-You need the following installed on your machine:
-
+### Ferramentas Necessárias
+Para rodar esse laboratório na sua máquina, você vai precisar ter instalado:
 - **Python 3.12+**
-- **Node.js 20+** and **npm**
-- **AWS CLI v2** -- configured with credentials for an AWS account
-- **AWS CDK** -- `npm install -g aws-cdk`
-- **AgentCore CLI** -- `npm install -g @aws/agentcore` (see [docs](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-cli.html))
-- **uv** (Python package manager) -- `pip install uv` or [install instructions](https://docs.astral.sh/uv/getting-started/installation/)
-- **Docker** -- for building agent deployment packages
-- **Jupyter** -- `pip install jupyter ipykernel`
+- **Node.js 20+** e **npm**
+- **AWS CLI v2** -- Configurado com a sua conta da AWS.
+- **AWS CDK** -- Instale rodando `npm install -g aws-cdk`
+- **AgentCore CLI** -- Instale rodando `npm install -g @aws/agentcore`
+- **uv** (Gerenciador de pacotes Python super rápido) -- Instale com `pip install uv`
+- **Docker** -- Essencial para montar as imagens de deploy.
+- **Jupyter** -- Instale com `pip install jupyter ipykernel` (vamos usar notebooks para o passo-a-passo).
 
-### AWS permissions
-
-Your AWS credentials need broad permissions across these services:
-- Amazon Bedrock (model invocation + AgentCore)
+### Permissões da AWS
+A sua conta da AWS vai precisar de permissões para criar recursos nesses serviços:
+- Amazon Bedrock
 - Amazon Cognito
 - API Gateway
 - DynamoDB
-- Lambda
-- S3
-- IAM (role and policy management)
-- CloudFormation
-- CloudWatch & X-Ray
+- AWS Lambda
+- Amazon S3
+- AWS IAM
+- AWS CloudFormation
+- Amazon CloudWatch & AWS X-Ray
 - Amazon Verified Permissions
-- ECR
+- Amazon ECR
 
-> For a detailed IAM policy you can attach to your user/role, see the reference policy used in the managed workshop environment: it covers all required permissions across these services.
+### Região da AWS
+Para evitar problemas, faça este laboratório usando a região **us-east-1**. 
 
-### AWS Region
+## Como Começar
 
-This workshop is designed for **us-east-1**. AgentCore availability may vary by region -- check the [AgentCore documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html) for current region support.
-
-## Getting started
-
-### 1. Deploy the prerequisites CloudFormation stack
-
-The stack in [`infrastructure/prerequisites.yaml`](infrastructure/prerequisites.yaml) creates all foundational resources: Cognito user pool, Task Management API (DynamoDB + Lambda + API Gateway), IAM roles for AgentCore services, S3 buckets, CloudFront distribution, and observability configuration.
+### 1. Crie a Infraestrutura Base (CloudFormation)
+O arquivo `infrastructure/prerequisites.yaml` já tem tudo pronto para criar a base do projeto (usuários, tabelas, APIs). É só rodar no terminal:
 
 ```bash
 aws cloudformation deploy \
@@ -93,24 +86,12 @@ aws cloudformation deploy \
   --region us-east-1
 ```
 
-> **X-Ray Transaction Search:** The stack enables [X-Ray Transaction Search](https://docs.aws.amazon.com/xray/latest/devguide/xray-transaction-search.html) by default, which is required for the observability module. Only one Transaction Search configuration is allowed per account per region. If your account already has it enabled, add `--parameter-overrides EnableTransactionSearch=false` to the deploy command above to skip creating it. The prerequisites notebook (`00-prerequisites/notebook.ipynb`) includes a cell that checks whether Transaction Search is already active in your account.
+> **Atenção sobre o X-Ray:** O script acima já habilita o X-Ray Transaction Search por padrão. A AWS só permite um desses por conta/região. Se a sua conta já tem isso habilitado, adicione o parâmetro `--parameter-overrides EnableTransactionSearch=false` no comando acima para não dar erro.
 
-This takes approximately 5-10 minutes. You can monitor progress in the [CloudFormation console](https://console.aws.amazon.com/cloudformation/).
+Esse passo demora cerca de 5 a 10 minutos. Você pode acompanhar pelo console do CloudFormation na sua conta da AWS.
 
-**What the stack creates:**
-
-| Resource | Purpose |
-|----------|---------|
-| Cognito User Pool + Client | User authentication (OAuth 2.0) |
-| DynamoDB table (`aria-tasks`) | Task storage for the Task Management API |
-| Lambda + API Gateway | Task Management REST API (CRUD) |
-| S3 bucket (`aria-agent-code-*`) | Agent code artifact storage |
-| S3 bucket (`aria-frontend-*`) | Frontend static files |
-| CloudFront distribution | CDN for the frontend |
-| IAM roles | Separate roles for Runtime, Gateway, and Evaluations |
-| CloudWatch + X-Ray config | Observability infrastructure |
-
-### 2. Set up your Python environment
+### 2. Prepare seu Ambiente Python
+Crie um ambiente virtual e instale o Jupyter:
 
 ```bash
 python3.12 -m venv .venv
@@ -119,29 +100,14 @@ pip install jupyter ipykernel boto3
 python -m ipykernel install --user --name workshop --display-name "workshop"
 ```
 
-### 3. Open the first notebook
+### 3. Abra o Primeiro Notebook
+Abra o arquivo `00-prerequisites/notebook.ipynb` na sua ferramenta favorita (VS Code, Jupyter no navegador, PyCharm). Quando pedir para escolher o kernel, selecione o `workshop` que acabamos de criar. Rode as células apertando `Shift+Enter`.
 
-Open `00-prerequisites/notebook.ipynb` in your preferred environment:
+### 4. Siga os Módulos na Ordem
+Cada notebook foi pensado para ser rodado passo a passo (do 00 ao 08). Eles começam fazendo uma checagem mágica (`ensure_ready`) para garantir que você não esqueceu de rodar o módulo anterior e explicam tudo direitinho de forma bem didática.
 
-- **VS Code** -- open the file directly (the [Jupyter extension](https://marketplace.visualstudio.com/items?itemName=ms-toolsai.jupyter) handles `.ipynb` natively)
-- **JetBrains (PyCharm, IntelliJ)** -- open the file directly (built-in Jupyter support)
-- **Jupyter in the browser** -- run `jupyter notebook 00-prerequisites/notebook.ipynb`
-
-When prompted, select the **workshop** kernel you created in step 2. Run cells top-to-bottom with `Shift+Enter`.
-
-### 4. Work through modules in order
-
-Follow the notebooks sequentially (00 through 08). Each module:
-- Starts with a **catch-up cell** (`ensure_ready`) that checks and creates any missing resources from previous modules
-- Contains markdown explanations of the concepts and architecture
-- Has code cells that build and deploy each piece
-- Ends with a link to the next module
-
-> **Smart catch-up:** You can start at any module. The `ensure_ready()` function at the top of each notebook detects what exists, creates anything missing, and fixes broken resources.
-
-### 5. Clean up
-
-Module 08 includes cleanup instructions. You can also delete all resources by running:
+### 5. Limpando Tudo no Final
+Para não gastar dinheiro na AWS depois que terminar o curso, lembre-se de limpar os recursos. O Módulo 08 mostra como fazer isso, e você pode rodar esse comando para apagar a infra base:
 
 ```bash
 aws cloudformation delete-stack \
@@ -149,78 +115,15 @@ aws cloudformation delete-stack \
   --region us-east-1
 ```
 
-And use the cleanup notebook in `99-admin/` to remove any AgentCore resources (Runtimes, Gateways, Memory stores, etc.) that were created outside of CloudFormation.
+## Estimativa de Tempo e Custo
+- **Tempo:** Você deve levar entre 1 e 2 horas para terminar todos os passos.
+- **Custo:** Você deve gastar cerca de $1 a $5 USD na sua conta da AWS, a maior parte sendo apenas do uso do modelo (LLM) no Amazon Bedrock.
 
-## Directory structure
+---
 
-```
-.
-├── infrastructure/
-│   └── prerequisites.yaml           # CloudFormation stack (Cognito, APIs, IAM, S3, etc.)
-├── shared/                          # Shared utilities (imported by all notebooks)
-│   ├── utils.py                     # AWS helpers, config persistence, polling
-│   ├── deploy_agent.py              # Package + deploy agent to Runtime
-│   ├── ensure_ready.py              # Smart catch-up (idempotent resource creation)
-│   ├── test_agent.py                # Invoke deployed agent + JWT helpers
-│   ├── chat.py                      # Chat/conversation utilities
-│   └── progress.py                  # Visual progress tracker
-├── 00-prerequisites/notebook.ipynb  # Verify environment & infrastructure
-├── 01-introduction/notebook.ipynb   # AgentCore architecture & CLI
-├── 02-runtime/                      # Deploy first agent
-│   ├── notebook.ipynb
-│   └── agent/                       # Aria V1 (basic conversational agent)
-├── 03-tools/                        # Add code execution & web browsing
-│   ├── notebook.ipynb
-│   └── agent/                       # Aria V2
-├── 04-memory/                       # Add persistent memory
-│   ├── notebook.ipynb
-│   ├── agent/                       # Aria V3
-│   └── scripts/
-├── 05-gateway-identity/             # API access & JWT auth
-│   ├── notebook.ipynb
-│   ├── agent/                       # Aria V4
-│   └── scripts/
-├── 06-policy/                       # Cedar policy enforcement
-│   ├── notebook.ipynb
-│   ├── policies/                    # Cedar policy files
-│   └── scripts/
-├── 07-observability-evaluations/    # Tracing & quality monitoring
-│   ├── notebook.ipynb
-│   ├── agent/                       # Aria V5 (production-hardened)
-│   └── scripts/
-├── 08-full-deployment/              # Frontend, integration tests, full review
-│   ├── notebook.ipynb
-│   ├── cdk/                         # CDK app for frontend infrastructure
-│   ├── frontend/                    # Web frontend source
-│   └── scripts/
-├── 99-admin/                        # Cleanup utilities
-└── images/                          # Architecture diagrams
-```
-
-## Estimated time
-
-1-2 hours for the complete course.
-
-## Estimated cost
-
-$1-5 depending on usage, dominated by Bedrock model invocation costs. Cleanup instructions are provided in Module 08 and the 99-admin folder.
-
-## Key documentation
-
-- [AgentCore Overview](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html)
-- [AgentCore Runtime](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-runtime.html)
-- [AgentCore Memory](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-memory.html)
-- [AgentCore Gateway](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-gateway.html)
-- [AgentCore Identity](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-identity.html)
-- [AgentCore Policy](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-policy.html)
-- [AgentCore Observability](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-observability.html)
-- [AgentCore Evaluations](https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-evaluations.html)
-- [Strands Agents SDK](https://strandsagents.com)
-
-## Security
-
-See [CONTRIBUTING](CONTRIBUTING.md) for more information.
-
-## License
-
-This project is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
+> [!IMPORTANT]
+> **Atribuição de Autoria e Compliance Institucional**
+> 
+> Todo o escopo, código base e arquitetura de infraestrutura gerada neste material de ensino derivam integralmente das fontes originais criadas pelo engenheiro de infraestrutura e autor da AWS, **Mike G. Chambers** (referência no GitHub: **mikegc-aws**). 
+> 
+> Este repositório é uma adaptação intensiva, traduzida e estruturada em formato de laboratório focado exclusivamente em ensino (hands-on) para o mercado brasileiro. Todos os direitos e créditos da arquitetura original pertencem e originam-se de seu trabalho. A finalidade deste repositório adaptado é educacional.

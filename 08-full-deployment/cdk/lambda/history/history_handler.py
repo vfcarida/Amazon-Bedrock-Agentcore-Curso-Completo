@@ -52,7 +52,7 @@ def handler(event, context):
     try:
         client = boto3.client("bedrock-agentcore", region_name=REGION)
 
-        # Retrieve conversation events for this session.
+        # Pega o histórico de eventos da conversa para essa sessão.
         response = client.list_events(
             memoryId=MEMORY_ID,
             sessionId=session_id,
@@ -62,10 +62,10 @@ def handler(event, context):
 
         raw_events = response.get("events", [])
 
-        # Sort events by timestamp (oldest first for conversation order)
+        # Ordena os eventos por data e hora (os mais antigos primeiro para manter a ordem da conversa)
         raw_events.sort(key=lambda e: e.get("eventId", ""))
 
-        # Parse events into a clean conversation array
+        # Limpa e formata os eventos em um formato mais fácil de ler
         messages = []
         for evt in raw_events:
             payloads = evt.get("payload", [])
@@ -87,7 +87,7 @@ def handler(event, context):
                 if role not in ("user", "assistant"):
                     continue
 
-                # Skip tool use/result messages — only show human-readable text
+                # Ignora mensagens técnicas de ferramentas — mostra apenas o texto real da conversa
                 text_content = extract_text_from_content(content_blocks)
                 if not text_content.strip():
                     continue

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuração
 # ---------------------------------------------------------------------------
 
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -37,14 +37,14 @@ it improves clarity.
 """
 
 # ---------------------------------------------------------------------------
-# Runtime app
+# App do Runtime
 # ---------------------------------------------------------------------------
 
 app = BedrockAgentCoreApp()
 
-# The Agent is created on first invocation and reused for subsequent
-# invocations within the same session. Runtime guarantees that each
-# session runs in its own microVM, so there is only ever one session here.
+# O Agente é criado na primeira vez que é chamado e reutilizado nas próximas
+# chamadas da mesma sessão. O Runtime garante que cada
+# sessão rode isolada na sua própria microVM, então só existe uma sessão rodando aqui.
 _agent = None
 
 

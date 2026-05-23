@@ -42,8 +42,8 @@ about, browse the web rather than guessing. If they need a calculation, use code
 
 app = BedrockAgentCoreApp()
 
-# Created on first invocation, reused for the lifetime of the microVM.
-# Runtime guarantees one session per microVM, so no multi-session management needed.
+# Criado na primeira execução, e reaproveitado enquanto a microVM estiver viva.
+# O Runtime garante uma sessão por microVM, então não precisamos nos preocupar com gestão de múltiplas sessões.
 _agent = None
 
 

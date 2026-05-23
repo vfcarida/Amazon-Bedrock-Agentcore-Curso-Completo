@@ -148,14 +148,14 @@ def setup_evaluations(
     print(f"  Sampling rate: {sampling_rate}%")
     print()
 
-    # --- Phase 1: Create evaluators ---
+    # --- Fase 1: Criar os avaliadores ---
     print("Phase 1: Creating custom evaluators")
     evaluator_ids = {}
 
     for eval_def in get_evaluator_definitions():
         name = eval_def["evaluatorName"]
 
-        # Check existing
+        # Verifica se já existe um gateway criado
         existing_id = None
         try:
             resp = client.list_evaluators()
@@ -182,11 +182,11 @@ def setup_evaluations(
                 print(f"  ❌ Failed to create {name}: {e}")
                 raise
 
-    # --- Phase 2: Online evaluation configs ---
+    # --- Fase 2: Configurações de avaliação online ---
     print()
     print("Phase 2: Creating online evaluation configurations")
 
-    # CloudWatch log group for AgentCore Runtime traces
+    # Pega o grupo de logs do CloudWatch onde ficam os traces do AgentCore Runtime
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent_name}"
 
     online_evals = [
@@ -205,7 +205,7 @@ def setup_evaluations(
     for oe in online_evals:
         name = oe["name"]
 
-        # Check existing
+        # Verifica se já existe um gateway criado
         try:
             resp = client.list_online_evaluation_configs()
             existing = any(

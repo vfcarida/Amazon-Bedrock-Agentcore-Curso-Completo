@@ -6,10 +6,10 @@ based on the presence of deployed resources (saved configs).
 
 from . import utils
 
-# Module definitions: (id, label, config_check)
+# Definições dos Módulos: (id, nome_amigável, verifica_se_esta_pronto)
 MODULES = [
     ("00", "Prerequisites", lambda: bool(utils.get_all_cfn_outputs())),
-    ("01", "Introduction & CLI", lambda: True),  # No deployable resources
+    ("01", "Introduction & CLI", lambda: True),  # Sem recursos passíveis de deploy nessa fase
     ("02", "Runtime", lambda: utils.load_config("runtime") is not None),
     ("03", "Tools", lambda: _runtime_has_tools()),
     ("04", "Memory", lambda: utils.load_config("memory") is not None),
@@ -79,7 +79,7 @@ def check_prerequisites() -> dict:
 
     print("✅ CloudFormation prerequisites detected:")
     for key, value in sorted(outputs.items()):
-        # Truncate long values
+        # Abrevia valores muito longos pra não quebrar a tela do terminal
         display = value if len(value) < 60 else value[:57] + "..."
         print(f"   {key}: {display}")
     print()

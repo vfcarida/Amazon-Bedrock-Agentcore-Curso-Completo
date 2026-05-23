@@ -111,7 +111,7 @@ def create_policy_engine(
     region = utils.get_region()
     client = boto3.client("bedrock-agentcore-control", region_name=region)
 
-    # Load gateway config
+    # Carrega as configurações salvas do gateway
     gw_config = utils.get_gateway_config(client)
     gateway_id = gw_config["gateway_id"]
     gateway_arn = gw_config["gateway_arn"]
@@ -123,13 +123,13 @@ def create_policy_engine(
     print(f"  Enforcement Mode : {enforcement_mode}")
     print()
 
-    # --- Step 1: Create Policy Engine ---
+    # --- Passo 1: Criar o Policy Engine (Motor de Políticas) ---
     print("[1/3] Creating Policy Engine...")
 
     engine_id = None
     engine_arn = None
 
-    # Check existing
+    # Verifica se já existe um gateway criado
     try:
         paginator = client.get_paginator("list_policy_engines")
         for page in paginator.paginate():
@@ -167,7 +167,7 @@ def create_policy_engine(
                 raise
             raise
 
-    # --- Step 2: Create Cedar Policies ---
+    # --- Passo 2: Criar as Políticas Cedar ---
     print()
     print("[2/3] Creating Cedar policies...")
 
@@ -187,9 +187,9 @@ def create_policy_engine(
             else:
                 raise
 
-    time.sleep(5)  # Allow policies to propagate
+    time.sleep(5)  # Dá um tempinho para as políticas se propagarem na rede
 
-    # --- Step 3: Attach to Gateway ---
+    # --- Passo 3: Conectar a política ao Gateway ---
     print()
     print(f"[3/3] Attaching to gateway (mode: {enforcement_mode})...")
 
@@ -211,7 +211,7 @@ def create_policy_engine(
     client.update_gateway(**update_params)
     print(f"  ✅ Policy engine attached in {enforcement_mode} mode")
 
-    # Save config
+    # Salva as configurações
     config = {
         "policy_engine_id": engine_id,
         "policy_engine_arn": engine_arn,
@@ -236,7 +236,7 @@ def create_policy_engine(
     return config
 
 
-# Also save standalone Cedar files for reference
+# Também salva os arquivos Cedar separadamente para referência
 def write_cedar_files(gateway_arn: str, output_dir: str | None = None) -> None:
     """Write Cedar policy files to disk for reference."""
     if output_dir is None:

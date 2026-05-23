@@ -32,7 +32,7 @@ from . import utils
 from . import deploy_agent
 
 # ---------------------------------------------------------------------------
-# Resource descriptors
+# Nomes e descrições dos recursos
 # ---------------------------------------------------------------------------
 
 
@@ -99,28 +99,28 @@ def _describe_policy_engine(control_client) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Module requirements map
+# Mapa de requisitos de cada módulo
 # ---------------------------------------------------------------------------
 
-# Each module lists the resources that must exist before it can run.
-# "runtime" is special -- it means the agent code for that module version
-# must be deployed, not just that any runtime exists.
+# Cada módulo do curso diz quais recursos já devem estar rodando na AWS antes de começar
+# "runtime" é especial -- quer dizer que não basta qualquer runtime, é preciso que o
+# código do agente correspondente àquele módulo específico já esteja com deploy feito.
 
 MODULE_REQUIREMENTS = {
-    "00": [],                                               # Prerequisites (CFN only)
-    "01": [],                                               # Intro (no resources)
-    "02": [],                                               # Runtime (this is where we create it)
-    "03": ["runtime"],                                      # Tools (needs runtime)
-    "04": ["runtime"],                                      # Memory (lesson creates memory)
-    "05": ["runtime", "memory"],                            # Gateway & Identity (lesson creates gateway)
-    "06": ["runtime", "memory", "gateway"],                 # Policy (lesson creates policy)
-    "07": ["runtime", "memory", "gateway", "policy"],       # Observability
-    "08": ["runtime", "memory", "gateway", "policy"],       # Full deployment
+    "00": [],                                               # Módulo 00: Valida os pré-requisitos do CloudFormation
+    "01": [],                                               # Módulo 01: Introdução (nenhum recurso novo criado aqui)
+    "02": [],                                               # Módulo 02: Onde criamos o Runtime pela primeira vez
+    "03": ["runtime"],                                      # Módulo 03: Adicionando Ferramentas (requer o runtime já criado)
+    "04": ["runtime"],                                      # Módulo 04: Memória
+    "05": ["runtime", "memory"],                            # Módulo 05: Gateway e Identidade
+    "06": ["runtime", "memory", "gateway"],                 # Módulo 06: Políticas de Acesso Cedar
+    "07": ["runtime", "memory", "gateway", "policy"],       # Módulo 07: Observabilidade
+    "08": ["runtime", "memory", "gateway", "policy"],       # Módulo 08: Deploy completo da aplicação
 }
 
 
 # ---------------------------------------------------------------------------
-# Resource setup functions (idempotent)
+# Funções inteligentes de criação: elas só criam o recurso se ele não existir (são idempotentes)
 # ---------------------------------------------------------------------------
 
 
@@ -182,7 +182,7 @@ def _ensure_memory(control_client) -> dict:
             else:
                 raise
 
-    # Wait for ACTIVE
+    # Aguarda até que o status fique como ACTIVE
     result = utils.poll_until(
         describe_fn=lambda: control_client.get_memory(memoryId=memory_id).get("memory", {}),
         target_statuses={"ACTIVE"},
@@ -210,7 +210,7 @@ def _ensure_gateway(control_client) -> dict:
             "from CFN outputs. Ensure the prerequisites stack is deployed."
         )
 
-    # Check for Cognito details (needed for CUSTOM_JWT)
+    # Busca os detalhes do Cognito gerados no CloudFormation (necessário pro login com CUSTOM_JWT)
     user_pool_id = cfn.get("UserPoolId") or cfn.get("CognitoUserPoolId")
     cognito_client_id = cfn.get("UserPoolClientId") or cfn.get("CognitoClientId")
 
@@ -227,7 +227,7 @@ def _ensure_gateway(control_client) -> dict:
         })
         return existing
 
-    # Create gateway
+    # Cria o Gateway
     print("  🆕 Creating AgentCore Gateway...")
     region = utils.get_region()
 
@@ -238,7 +238,7 @@ def _ensure_gateway(control_client) -> dict:
         "protocolType": "MCP",
     }
 
-    # Use CUSTOM_JWT if Cognito is available, otherwise NONE
+    # Se tiver Cognito configurado, usa CUSTOM_JWT, senão deixa liberado (NONE)
     if user_pool_id and cognito_client_id:
         oidc_url = (
             f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
@@ -272,7 +272,7 @@ def _ensure_gateway(control_client) -> dict:
 
     gateway_id = resp.get("gatewayId", resp.get("gatewayIdentifier"))
 
-    # Wait for READY
+    # Aguarda até ficar com status READY
     utils.poll_until(
         describe_fn=lambda: control_client.get_gateway(gatewayIdentifier=gateway_id),
         label="Gateway",
@@ -283,7 +283,7 @@ def _ensure_gateway(control_client) -> dict:
     gateway_url = gw_detail.get("gatewayUrl", "")
     gateway_arn = gw_detail.get("gatewayArn", "")
 
-    # Add Task API target
+    # Adiciona a API de Tarefas como um target no gateway
     print("  📎 Adding Task API target...")
     try:
         target_resp = control_client.create_gateway_target(
@@ -320,7 +320,7 @@ def _ensure_gateway(control_client) -> dict:
         )
         target_id = target_resp["targetId"]
 
-        # Wait for target READY
+        # Aguarda até o Target ficar pronto e operante
         utils.poll_until(
             describe_fn=lambda: control_client.get_gateway_target(
                 gatewayIdentifier=gateway_id, targetId=target_id
@@ -368,7 +368,7 @@ def _ensure_policy(control_client) -> dict:
         })
         return existing
 
-    # Create policy engine
+    # Cria a engine do Policy
     print("  🆕 Creating Policy Engine...")
     try:
         resp = control_client.create_policy_engine(
@@ -390,7 +390,7 @@ def _ensure_policy(control_client) -> dict:
         engine_id = resp["policyEngineId"]
         engine_arn = resp.get("policyEngineArn", "")
 
-    # Wait for ACTIVE
+    # Aguarda até que o status fique como ACTIVE
     utils.poll_until(
         describe_fn=lambda: control_client.get_policy_engine(policyEngineId=engine_id),
         target_statuses={"ACTIVE", "READY"},
@@ -398,7 +398,7 @@ def _ensure_policy(control_client) -> dict:
         timeout=300,
     )
 
-    # Create per-action Cedar policies (broad permits cause tools to disappear in ENFORCE mode)
+    # Cria as regras de acesso Cedar separadas por ação
     policies = [
         {
             "name": "permit_list_tasks",
@@ -468,7 +468,7 @@ def _ensure_policy(control_client) -> dict:
             else:
                 raise
 
-    # Attach to gateway
+    # Prende o motor de políticas lá no Gateway
     print("  📎 Attaching policy engine to gateway...")
     try:
         gw = control_client.get_gateway(gatewayIdentifier=gateway_id)
@@ -506,19 +506,19 @@ def _ensure_runtime(control_client, module_id: str) -> dict:
 
     Deploys the agent code from the appropriate module directory.
     """
-    # Map module to agent directory
+    # Mapeia a pasta do código do agente referente a este módulo
     module_agent_dirs = {
         "02": "02-runtime",
         "03": "03-tools",
         "04": "04-memory",
         "05": "05-gateway-identity",
-        "06": "05-gateway-identity",  # Same agent as 05
+        "06": "05-gateway-identity",  # Reutiliza o código do agente da pasta 05
         "07": "07-observability-evaluations",
-        "08": "07-observability-evaluations",  # Same agent as 07
+        "08": "07-observability-evaluations",  # Reutiliza o código do agente da pasta 07
     }
 
-    # For catch-up, deploy the agent version from the PREVIOUS module
-    # (the current module's notebook will do its own deploy)
+    # Quando estiver fazendo catch-up para um lab específico, ele vai fazer o deploy
+    # do código do agente da versão imediatamente ANTERIOR àquele lab.
     prev_modules = {
         "03": "02", "04": "03", "05": "04",
         "06": "05", "07": "05", "08": "07",
@@ -534,11 +534,11 @@ def _ensure_runtime(control_client, module_id: str) -> dict:
         print(f"  ⚠ Agent directory not found: {agent_dir}")
         return {}
 
-    # Check if runtime exists and is healthy
+    # Confere se o Runtime já está rodando e saudável
     existing = _describe_runtime(control_client)
     if existing and existing.get("status") == "READY":
         print(f"  ✅ Runtime already exists and is READY: {existing['agentRuntimeId']}")
-        # Save config
+        # Salva as configurações
         result = {
             "runtime_id": existing["agentRuntimeId"],
             "runtime_arn": existing.get("agentRuntimeArn", ""),
@@ -550,10 +550,10 @@ def _ensure_runtime(control_client, module_id: str) -> dict:
         utils.save_config("runtime", result)
         return result
 
-    # Need to deploy
+    # Ops, precisamos fazer um novo deploy para seguir adiante
     print(f"  🆕 Deploying agent from {agent_subdir}/agent...")
 
-    # Build env vars based on what configs exist
+    # Constrói as variáveis de ambiente baseadas nos módulos que já foram configurados
     env_vars = {}
     memory_config = utils.load_config("memory")
     if memory_config:
@@ -569,7 +569,7 @@ def _ensure_runtime(control_client, module_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Ponto de entrada principal do script
 # ---------------------------------------------------------------------------
 
 
@@ -579,7 +579,7 @@ def ensure_ready(module_id: str) -> dict:
     This is the function to call at the top of every notebook:
 
         from shared.ensure_ready import ensure_ready
-        config = ensure_ready("04")  # For the Memory module
+        config = ensure_ready("04")  # Especificamente para o módulo Memory
 
     It will:
     1. Check CloudFormation prerequisites
@@ -602,7 +602,7 @@ def ensure_ready(module_id: str) -> dict:
     requirements = MODULE_REQUIREMENTS.get(module_id, [])
     result = {"module": module_id, "region": region}
 
-    # Always check CFN
+    # Sempre verifica se a base do CloudFormation está pronta
     print("📋 Checking CloudFormation outputs...")
     cfn = utils.get_all_cfn_outputs()
     if cfn:
@@ -611,7 +611,7 @@ def ensure_ready(module_id: str) -> dict:
     else:
         print("  ⚠ No CFN outputs found -- some features may not work")
 
-    # Check/create each required resource
+    # Cria ou checa todos os recursos que a aula de hoje exige
     if "memory" in requirements:
         print()
         print("🧠 Checking Memory...")

@@ -14,7 +14,7 @@ Docs: https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-memory.html
 import sys
 import os
 
-# Allow imports from shared/
+# Permite importar arquivos da pasta shared/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from shared import utils
@@ -35,7 +35,7 @@ def create_memory(region: str | None = None) -> dict:
     utils.print_banner("Creating AgentCore Memory")
     print()
 
-    # Check if it already exists
+    # Verifica se o recurso já existe na AWS
     try:
         paginator = client.get_paginator("list_memories")
         for page in paginator.paginate():
@@ -52,7 +52,7 @@ def create_memory(region: str | None = None) -> dict:
     except ClientError:
         pass
 
-    # Create new memory
+    # Cria uma nova memória para o agente
     print("Creating Memory resource with LTM strategies...")
     try:
         resp = client.create_memory(
@@ -97,7 +97,7 @@ def create_memory(region: str | None = None) -> dict:
     memory_id = resp["memory"]["id"]
     print(f"Memory ID: {memory_id}")
 
-    # Wait for ACTIVE
+    # Aguarda até que o status fique como ACTIVE
     print("Waiting for memory to become ACTIVE...")
     utils.poll_until(
         describe_fn=lambda: client.get_memory(memoryId=memory_id).get("memory", {}),

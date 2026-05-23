@@ -50,7 +50,7 @@ def invoke(
 
     client = boto3.client("bedrock-agentcore", region_name=region)
 
-    # If JWT provided, include it in the payload for the agent to forward to Gateway
+    # Se tiver token JWT de login, envia ele no cabeçalho. Assim o AgentCore repassa ele adiante pro Gateway.
     if jwt_token:
         payload_dict = json.loads(payload.decode())
         payload_dict["authorization"] = f"Bearer {jwt_token}"
@@ -72,7 +72,7 @@ def invoke(
         print(f"❌ Invocation failed: {e}")
         raise
 
-    # Stream the SSE response, printing text as it arrives
+    # Escuta a resposta e vai imprimindo na tela aos pouquinhos (stream) conforme o agente vai falando
     if print_response:
         print("💬 Response:")
         print("-" * 40)
@@ -115,7 +115,7 @@ def get_test_token(
     region = utils.get_region()
     cognito = boto3.client("cognito-idp", region_name=region)
 
-    # Ensure test user exists
+    # Verifica se o usuário de teste já existe
     try:
         cognito.admin_create_user(
             UserPoolId=user_pool_id,
@@ -139,7 +139,7 @@ def get_test_token(
         else:
             raise
 
-    # Authenticate
+    # Entrar no sistema
     resp = cognito.initiate_auth(
         ClientId=client_id,
         AuthFlow="USER_PASSWORD_AUTH",

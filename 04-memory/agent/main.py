@@ -46,8 +46,8 @@ Guidelines:
 
 app = BedrockAgentCoreApp()
 
-# Created on first invocation, reused for the lifetime of the microVM.
-# Runtime guarantees one session per microVM, so no multi-session management needed.
+# Criado na primeira execução, e reaproveitado enquanto a microVM estiver viva.
+# O Runtime garante uma sessão por microVM, então não precisamos nos preocupar com gestão de múltiplas sessões.
 _agent = None
 
 
@@ -85,12 +85,12 @@ def _create_agent(session_id: str, actor_id: str):
 
     model = BedrockModel(model_id=MODEL_ID, region_name=AWS_REGION)
 
-    # --- Tools ---------------------------------------------------------------
+    # --- Tools (Ferramentas) ---------------------------------------------------------------
     code_interpreter = AgentCoreCodeInterpreter(region=AWS_REGION)
     browser_tool = AgentCoreBrowser(region=AWS_REGION)
     tools = [code_interpreter.code_interpreter, browser_tool.browser]
 
-    # --- Memory --------------------------------------------------------------
+    # --- Memory (Memória) --------------------------------------------------------------
     session_manager = None
     if MEMORY_ID:
         from bedrock_agentcore.memory.integrations.strands.config import (
@@ -114,7 +114,7 @@ def _create_agent(session_id: str, actor_id: str):
             agentcore_memory_config=config, region_name=AWS_REGION,
         )
 
-    # --- Agent ---------------------------------------------------------------
+    # --- Agent (Agente) ---------------------------------------------------------------
     return Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,

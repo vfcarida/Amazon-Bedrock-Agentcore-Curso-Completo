@@ -49,12 +49,12 @@ def package_agent(agent_dir: str | Path, output_path: str | None = None) -> str:
 
     skip_patterns = {"__pycache__", ".pyc", ".git", ".DS_Store", ".env"}
 
-    # Install dependencies into a staging directory if requirements.txt exists
+    # Instala as dependências numa pasta temporária se houver um requirements.txt
     requirements_file = agent_path / "requirements.txt"
     deps_dir = None
     if requirements_file.exists():
         deps_dir = tempfile.mkdtemp(prefix="agentcore-deps-")
-        # Try platform candidates in order, matching the official AgentCore CLI
+        # Tenta encontrar a versão certa da biblioteca de acordo com a arquitetura oficial do AgentCore
         platforms = ["aarch64-manylinux2014", "aarch64-manylinux_2_28", "aarch64-manylinux_2_34"]
         installed = False
         for platform in platforms:
@@ -76,7 +76,7 @@ def package_agent(agent_dir: str | Path, output_path: str | None = None) -> str:
                 installed = True
                 break
             else:
-                # Clean staging dir for retry
+                # Limpa a pasta temporária para tentar novamente, caso falhe
                 shutil.rmtree(deps_dir, ignore_errors=True)
                 os.makedirs(deps_dir, exist_ok=True)
                 print(f"  Platform {platform} failed, trying next...")
@@ -89,7 +89,7 @@ def package_agent(agent_dir: str | Path, output_path: str | None = None) -> str:
 
     file_count = 0
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Add dependency files first (they form the base layer)
+        # Adiciona os arquivos das dependências no zip primeiro (ficam como camada base)
         if deps_dir:
             deps_path = Path(deps_dir)
             for file_path in sorted(deps_path.rglob("*")):
@@ -101,7 +101,7 @@ def package_agent(agent_dir: str | Path, output_path: str | None = None) -> str:
                 zf.write(file_path, file_path.relative_to(deps_path))
                 file_count += 1
 
-        # Add agent source files (on top, so they override any conflicts)
+        # Adiciona os arquivos do próprio agente por cima (para sobrescrever se houver conflitos)
         for file_path in sorted(agent_path.rglob("*")):
             if not file_path.is_file():
                 continue
@@ -111,7 +111,7 @@ def package_agent(agent_dir: str | Path, output_path: str | None = None) -> str:
             zf.write(file_path, file_path.relative_to(agent_path))
             file_count += 1
 
-    # Cleanup temp deps directory
+    # Apaga a pasta temporária de dependências para manter tudo limpo
     if deps_dir:
         shutil.rmtree(deps_dir, ignore_errors=True)
 
@@ -162,7 +162,7 @@ def _delete_runtime(control_client, runtime_id: str, timeout: int = 300):
             return
         raise
 
-    # Wait for deletion to complete
+    # Aguarda até que o arquivo seja apagado com sucesso
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -220,7 +220,7 @@ def deploy(
     region = utils.get_region()
     account_id = utils.get_account_id()
 
-    # Auto-discover from CFN outputs if not provided
+    # Descobre automaticamente usando as saídas do CloudFormation outputs if not provided
     cfn = utils.get_all_cfn_outputs()
     if role_arn is None:
         role_arn = cfn.get("AgentRuntimeRoleArn") or cfn.get("RuntimeRoleArn")
@@ -247,18 +247,18 @@ def deploy(
     print(f"  Bucket:   {s3_bucket}")
     print()
 
-    # Step 1: Package
+    # Passo 1: Empacotar (Criar o zip com o código do agente)
     zip_path = package_agent(agent_dir)
 
-    # Step 2: Upload
+    # Passo 2: Upload pro S3
     s3_key = upload_to_s3(zip_path, s3_bucket)
 
-    # Step 3: Create or update
+    # Passo 3: Criar um novo runtime ou atualizar se já existir
     control = boto3.client("bedrock-agentcore-control", region_name=region)
     existing = _find_existing_runtime(control, runtime_name)
 
-    # Clean start: delete any existing runtime to avoid stale config
-    # (e.g., JWT auth left over from a previous workshop run)
+    # 'Clean start': apaga qualquer runtime existente para evitar que configurações velhas atrapalhem
+    # (Ex: Evitar que configurações antigas de JWT de um lab passado quebrem as coisas agora)
     if clean_start and existing:
         _delete_runtime(control, existing["agentRuntimeId"])
         existing = None
@@ -279,20 +279,20 @@ def deploy(
         "environmentVariables": env_vars,
     }
 
-    # Common params for both create and update
+    # Parâmetros que são usados tanto na criação quanto na atualização
     runtime_params["roleArn"] = role_arn
     runtime_params["networkConfiguration"] = {"networkMode": "PUBLIC"}
     runtime_params["lifecycleConfiguration"] = {
-        "idleRuntimeSessionTimeout": 900,   # 15 min idle keep-alive
-        "maxLifetime": 28800,               # 8 hours max
+        "idleRuntimeSessionTimeout": 900,   # Mantém a sessão viva por 15 minutos em inatividade
+        "maxLifetime": 28800,               # Tempo máximo total da sessão de 8 horas
     }
     if existing:
         runtime_id = existing["agentRuntimeId"]
         print(f"🔄 Updating existing runtime: {runtime_id}")
         runtime_params["agentRuntimeId"] = runtime_id
 
-        # Preserve existing config (e.g., CUSTOM_JWT and header allowlist set
-        # by deploy_frontend) so that redeploying agent code doesn't wipe them.
+        # Mantém as configurações atuais do Runtime intactas
+        # (para que o deploy de um novo código não zere as configurações de autenticação JWT, por exemplo).
         current = control.get_agent_runtime(agentRuntimeId=runtime_id)
         existing_auth = current.get("authorizerConfiguration")
         if existing_auth:
@@ -314,7 +314,7 @@ def deploy(
         runtime_params["protocolConfiguration"] = {"serverProtocol": "HTTP"}
         runtime_params["tags"] = {"Project": utils.PROJECT_TAG}
 
-        # JWT authorizer
+        # Autorizador via JWT
         if discovery_url and client_id:
             runtime_params["authorizerConfiguration"] = {
                 "customJWTAuthorizer": {
@@ -347,7 +347,7 @@ def deploy(
     print(f"  Runtime ARN: {runtime_arn}")
     print()
 
-    # Step 4: Wait for READY
+    # Passo 4: Fica de olho até o Runtime avisar que está pronto (READY)
     print("⏳ Waiting for runtime to be ready...")
     final = utils.poll_until(
         describe_fn=lambda: control.get_agent_runtime(agentRuntimeId=runtime_id),
@@ -355,7 +355,7 @@ def deploy(
         timeout=timeout,
     )
 
-    # Build invocation endpoint
+    # Monta a URL completa para fazermos chamadas pro agente
     import urllib.parse
     escaped_arn = urllib.parse.quote(runtime_arn or final.get("agentRuntimeArn", ""), safe="")
     endpoint = (
@@ -374,7 +374,7 @@ def deploy(
         "account_id": account_id,
     }
 
-    # Persist for other modules
+    # Salva as configurações num arquivo para os próximos labs lerem
     utils.save_config("runtime", result)
 
     print()
@@ -384,7 +384,7 @@ def deploy(
     print(f"  Endpoint:    {endpoint[:80]}...")
     print()
 
-    # Cleanup temp zip
+    # Apaga o arquivo zip temporário gerado localmente
     try:
         os.remove(zip_path)
     except OSError:

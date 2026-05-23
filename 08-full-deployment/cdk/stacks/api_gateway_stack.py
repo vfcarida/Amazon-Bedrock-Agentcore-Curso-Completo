@@ -36,20 +36,20 @@ class ApiGatewayStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # ----- Context variables (populated by deploy_frontend.py) -----
+        # ----- Variáveis de contexto (preenchidas pelo deploy_frontend.py) -----
         runtime_id = self.node.try_get_context("runtime_id") or "PLACEHOLDER"
         account_id = self.node.try_get_context("account_id") or self.account
         memory_id = self.node.try_get_context("memory_id") or "PLACEHOLDER"
         user_pool_id = self.node.try_get_context("user_pool_id") or "PLACEHOLDER"
 
-        # AgentCore Runtime /invocations endpoint (supports JWT + streaming)
+        # Endpoint /invocations do AgentCore Runtime (suporta JWT + streaming)
         runtime_url = (
             f"https://bedrock-agentcore.{self.region}.amazonaws.com"
             f"/runtimes/{runtime_id}/invocations"
             f"?qualifier=DEFAULT&accountId={account_id}"
         )
 
-        # ----- Look up existing Cognito User Pool -----
+        # ----- Busca o Cognito User Pool existente -----
         user_pool = cognito.UserPool.from_user_pool_id(
             self, "ExistingUserPool", user_pool_id
         )
@@ -72,7 +72,7 @@ class ApiGatewayStack(Stack):
             ),
         )
 
-        # ----- CORS -----
+        # ----- Configurações de CORS -----
         cors_options = apigateway.CorsOptions(
             allow_origins=apigateway.Cors.ALL_ORIGINS,
             allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -86,7 +86,7 @@ class ApiGatewayStack(Stack):
             max_age=cdk.Duration.hours(1),
         )
 
-        # ----- Cognito Authorizer -----
+        # ----- Autorizador do Cognito -----
         authorizer = apigateway.CognitoUserPoolsAuthorizer(
             self,
             "AriaAuthorizer",
@@ -95,7 +95,7 @@ class ApiGatewayStack(Stack):
             results_cache_ttl=cdk.Duration.minutes(5),
         )
 
-        # ----- IAM Role for API Gateway to invoke Runtime -----
+        # ----- Role do IAM para o API Gateway conseguir chamar o Runtime -----
         apigw_runtime_role = iam.Role(
             self,
             "ApiGwRuntimeRole",
@@ -114,7 +114,7 @@ class ApiGatewayStack(Stack):
         )
 
         # =====================================================================
-        # POST /chat -- Streaming proxy to AgentCore Runtime
+        # POST /chat -- Rota que repassa a chamada via streaming para o AgentCore Runtime
         # =====================================================================
         chat_resource = api.root.add_resource("chat")
         chat_resource.add_cors_preflight(**{
@@ -147,14 +147,14 @@ class ApiGatewayStack(Stack):
             },
         )
 
-        # Enable streaming via CloudFormation escape hatch
+        # Habilita o streaming (envio de respostas aos poucos) usando uma configuração especial do CloudFormation
         cfn_method = post_method.node.default_child
         cfn_method.add_property_override(
             "Integration.ResponseTransferMode", "STREAM"
         )
 
         # =====================================================================
-        # DynamoDB table for session metadata
+        # Tabela do DynamoDB que vai guardar os metadados das sessões
         # =====================================================================
         sessions_table = dynamodb.Table(
             self,
@@ -173,7 +173,7 @@ class ApiGatewayStack(Stack):
         )
 
         # =====================================================================
-        # GET /sessions
+        # GET /sessions - Busca as sessões
         # =====================================================================
         sessions_lambda_path = os.path.join(
             os.path.dirname(__file__), "..", "lambda", "sessions"
@@ -210,7 +210,7 @@ class ApiGatewayStack(Stack):
             authorizer=authorizer,
         )
 
-        # PUT /sessions/{sessionId}
+        # PUT /sessions/{sessionId} - Salva ou atualiza uma sessão
         upsert_session_lambda_path = os.path.join(
             os.path.dirname(__file__), "..", "lambda", "upsert_session"
         )
@@ -232,7 +232,7 @@ class ApiGatewayStack(Stack):
 
         sessions_table.grant_write_data(upsert_session_fn)
 
-        # DELETE /sessions/{sessionId}
+        # DELETE /sessions/{sessionId} - Apaga uma sessão
         delete_session_lambda_path = os.path.join(
             os.path.dirname(__file__), "..", "lambda", "delete_session"
         )
@@ -276,7 +276,7 @@ class ApiGatewayStack(Stack):
         )
 
         # =====================================================================
-        # GET /history/{sessionId}
+        # GET /history/{sessionId} - Pega o histórico da conversa
         # =====================================================================
         history_lambda_path = os.path.join(
             os.path.dirname(__file__), "..", "lambda", "history"
@@ -326,9 +326,9 @@ class ApiGatewayStack(Stack):
             authorizer=authorizer,
         )
 
-        # ----- Workshop cleanup: ensure all resources are deletable -----
-        # CDK defaults the API Gateway Account and its CloudWatch role to Retain.
-        # Override to Delete so the workshop stack tears down cleanly.
+        # ----- Limpeza do workshop: garante que todos os recursos possam ser apagados no final -----
+        # O CDK por padrão não apaga a Role do CloudWatch do API Gateway (deixa como Retain).
+        # Mudamos para Delete para que dê pra apagar tudo certinho no final do laboratório.
         for child in api.node.find_all():
             if isinstance(child, cdk.CfnResource):
                 if child.cfn_resource_type in (

@@ -5,8 +5,8 @@ Talks directly to a deployed AgentCore Runtime agent with streaming output.
 Supports both IAM (SigV4) and OAuth (JWT) authentication modes.
 
 Usage from any module directory:
-    python ../shared/chat.py              # IAM auth (Modules 02-04)
-    python ../shared/chat.py --auth       # OAuth/JWT auth (Modules 05+)
+    python ../shared/chat.py              # Autenticação via IAM (Módulos 02 ao 04)
+    python ../shared/chat.py --auth       # Autenticação via OAuth/JWT (Módulos 05 em diante)
 """
 
 import argparse
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared import utils
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuração
 # ---------------------------------------------------------------------------
 
 CONFIG_DIR = Path(__file__).resolve().parent / ".config"
@@ -52,7 +52,7 @@ def _get_cfn_outputs() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Authentication
+# Autenticação
 # ---------------------------------------------------------------------------
 
 
@@ -73,7 +73,7 @@ def _get_jwt_token() -> str:
     username = "workshop@example.com"
     password = "WorkshopPass123!"
 
-    # Ensure test user exists
+    # Verifica se o usuário de teste já existe
     try:
         cognito.admin_create_user(
             UserPoolId=user_pool_id,
@@ -104,7 +104,7 @@ def _get_jwt_token() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Agent invocation (streaming)
+# Chamada do agente (com respostas em streaming)
 # ---------------------------------------------------------------------------
 
 
@@ -132,7 +132,7 @@ def invoke_streaming(
 
 
 # ---------------------------------------------------------------------------
-# REPL
+# Loop de terminal (REPL) para você bater papo com o agente
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +145,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load runtime config
+    # Carrega as configurações do runtime
     runtime_config = _load_config("runtime")
     if not runtime_config:
         print("Error: No runtime config found. Deploy the agent first (Module 02).")
@@ -155,7 +155,7 @@ def main():
     region = _get_region()
     session_id = str(uuid.uuid4())
 
-    # Authenticate if needed
+    # Autentica caso seja necessário
     jwt_token = None
     if args.auth:
         print("Authenticating...")

@@ -42,7 +42,7 @@ class FrontendStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # ----- Context variables -----
+        # ----- Variáveis de Contexto -----
         user_pool_id = self.node.try_get_context("user_pool_id") or "PLACEHOLDER"
         client_id = self.node.try_get_context("client_id") or "PLACEHOLDER"
         cognito_domain = self.node.try_get_context("cognito_domain") or "PLACEHOLDER"
@@ -59,7 +59,7 @@ class FrontendStack(Stack):
             auto_delete_objects=True,
         )
 
-        # ----- CloudFront Distribution -----
+        # ----- Distribuição do CloudFront -----
         distribution = cloudfront.Distribution(
             self,
             "AriaDistribution",
@@ -90,7 +90,7 @@ class FrontendStack(Stack):
             minimum_protocol_version=cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
         )
 
-        # ----- Generate config.js -----
+        # ----- Geração do arquivo config.js -----
         cloudfront_url = f"https://{distribution.distribution_domain_name}"
         cognito_domain_url = (
             f"https://{cognito_domain}.auth.{self.region}.amazoncognito.com"
@@ -116,7 +116,7 @@ window.ARIA_CONFIG = {{
 }};
 """
 
-        # ----- Deploy frontend files to S3 -----
+        # ----- Envia os arquivos do frontend para o S3 -----
         frontend_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "frontend"
         )
@@ -141,9 +141,9 @@ window.ARIA_CONFIG = {{
         )
         config_deploy.node.add_dependency(frontend_deploy)
 
-        # ----- Update Cognito callback URLs with CloudFront URL -----
-        # Solves the circular dependency: the workshop CFN template can't know
-        # the CloudFront URL at creation time.
+        # ----- Atualiza as URLs de callback do Cognito para usar a URL do CloudFront -----
+        # Isso resolve um problema de dependência circular: o CloudFormation inicial não tem como
+        # saber a URL do CloudFront antes dele ser criado.
         user_pool_arn = (
             f"arn:aws:cognito-idp:{self.region}:{self.account}:{user_pool_id}"
         )
@@ -219,7 +219,7 @@ window.ARIA_CONFIG = {{
             ]),
         )
 
-        # ----- Outputs -----
+        # ----- Saídas (Outputs) -----
         CfnOutput(
             self,
             "CloudFrontUrl",

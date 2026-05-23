@@ -44,7 +44,7 @@ def create_gateway(
     region = utils.get_region()
     cfn = utils.get_all_cfn_outputs()
 
-    # Auto-discover from CFN
+    # Descobre automaticamente usando as saídas do CloudFormation
     gateway_role_arn = gateway_role_arn or cfn.get("GatewayRoleArn") or cfn.get("GatewayServiceRoleArn")
     rest_api_id = rest_api_id or cfn.get("ApiGatewayRestApiId") or cfn.get("TaskApiRestApiId")
     user_pool_id = user_pool_id or cfn.get("UserPoolId") or cfn.get("CognitoUserPoolId")
@@ -64,10 +64,10 @@ def create_gateway(
     print(f"  Auth mode    : {'CUSTOM_JWT' if use_jwt and user_pool_id else 'NONE'}")
     print()
 
-    # --- Step 1: Create Gateway ---
+    # --- Passo 1: Criar o Gateway ---
     print("[1/2] Creating Gateway...")
 
-    # Check existing
+    # Verifica se já existe um gateway criado
     try:
         paginator = client.get_paginator("list_gateways")
         for page in paginator.paginate():
@@ -116,7 +116,7 @@ def create_gateway(
     gateway_id = resp["gatewayId"]
     print(f"  Gateway ID: {gateway_id}")
 
-    # Wait for READY
+    # Aguarda até ficar com status READY
     utils.poll_until(
         describe_fn=lambda: client.get_gateway(gatewayIdentifier=gateway_id),
         label="Gateway",
@@ -127,7 +127,7 @@ def create_gateway(
     gateway_url = detail.get("gatewayUrl", "")
     gateway_arn = detail.get("gatewayArn", "")
 
-    # --- Step 2: Add Target ---
+    # --- Passo 2: Adicionar um Target ---
     _ensure_target(client, gateway_id, rest_api_id)
 
     config = {
