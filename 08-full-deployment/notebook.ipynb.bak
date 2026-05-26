@@ -1,0 +1,436 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "id": "a1b2c3d4",
+      "metadata": {},
+      "source": [
+        "# Módulo 8: Deploy Integral e Testes de Integração de Arquitetura\n",
+        "\n",
+        "**Concluído!** A implementação corporativa e governada da **Aria** executando nativamente em toda infraestrutura da AWS AgentCore foi completada. O laboratório 8 finaliza com testes e roteiros seguros para os testes da arquitetura, antes do desmonte infraestrutural de sua Cloud."
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "b2c3d4e5",
+      "metadata": {},
+      "source": [
+        "## Arquitetura Sistêmica Integral (Review Lógico)\n",
+        "\n",
+        "Esta topologia modela integralmente o sistema distribuído provido pela AWS (Módulo 2 ao Módulo 8).\n",
+        "\n",
+        "![Overview](../shared/img/08.drawio.png)\n",
+        "\n",
+        "### O Cluster do AgentCore AWS Interconectado com o Endpoint React Web\n",
+        "\n",
+        "| Ordem Sequencial AWS | Microsserviço Subjacente | Implementação | Propósito de Engenharia |\n",
+        "|---|---|---|---|\n",
+        "| 1 | **Runtime** | Mod 02 | Contêiner Seguro gerenciado (Strands Agent/Python) acoplado a ciclo de vida auto-scale |\n",
+        "| 2 | **Code Interpreter** | Mod 03 | Sandbox Python Isolado - Roda algoritmos, matemática, parseio via bibliotecas nativas |\n",
+        "| 3 | **Browser Tool** | Mod 03 | Navegação remota em Headless Chrome encapsulado via Bedrock Tool. |\n",
+        "| 4 | **Memory** | Mod 04 | Ingestão autônoma em Backend (DynamoDB wrapper). LTM & STM em sincronia restrita ao ID. |\n",
+        "| 5 | **Gateway** | Mod 05 | Acoplamento de Target API via interface MCP gerenciada nativa |\n",
+        "| 6 | **Identity** | Mod 05 | Validador rigoroso do Bearer Token e propulsor da infraestrutura CUSTOM_JWT em nuvem. |\n",
+        "| 7 | **Policy** | Mod 06 | Motor Determinístico base (Cedar) - Interrompe acesso em milissegundos bloqueando a Payload de rede |\n",
+        "| 8 | **Observability** | Mod 07 | Exportador central ADOT - Processo daemon acoplado nativamente na nuvem emitindo AWS X-Ray. |\n",
+        "| 9 | **Evaluations** | Mod 07 | Juízes baseados em IA - Score numérico dinâmico extraído on-the-fly sobre OTel Dumps. |\n",
+        "| -- | **Frontend SPA** | Mod 08 | PWA/WebApp integrando SSE HTTP e OAuth Flow do Cognito. |"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "c3d4e5f6",
+      "metadata": {},
+      "source": [
+        "## Setup"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "d4e5f6a7",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "import sys; sys.path.insert(0, '..')\n",
+        "import boto3, json, uuid\n",
+        "from shared import utils\n",
+        "\n",
+        "region = utils.get_region()\n",
+        "control = boto3.client(\"bedrock-agentcore-control\", region_name=region)\n",
+        "data_client = boto3.client(\"bedrock-agentcore\", region_name=region)\n",
+        "\n",
+        "print(f\"Region:  {region}\")\n",
+        "print(f\"Account: {utils.get_account_id()}\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "e5f6a7b8",
+      "metadata": {},
+      "source": [
+        "## Validação Forense das APIs (Boto3 SDK)\n",
+        "\n",
+        "Teste lógico de Integridade e Dependências via chamadas não-estruturadas Boto3 REST. Nenhum nó pode retornar Null."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "f6a7b8c9",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Verify Runtime\n",
+        "print(\"=\" * 50)\n",
+        "print(\"  Runtime\")\n",
+        "print(\"=\" * 50)\n",
+        "\n",
+        "runtime_config = utils.load_config(\"runtime\")\n",
+        "if runtime_config:\n",
+        "    runtime_id = runtime_config[\"runtime_id\"]\n",
+        "    try:\n",
+        "        rt = control.get_agent_runtime(agentRuntimeId=runtime_id)\n",
+        "        print(f\"  Name:   {rt.get('agentRuntimeName', 'N/A')}\")\n",
+        "        print(f\"  ID:     {runtime_id}\")\n",
+        "        print(f\"  Status: {rt.get('status', 'UNKNOWN')}\")\n",
+        "        print(f\"  ARN:    {rt.get('agentRuntimeArn', 'N/A')[:80]}...\")\n",
+        "    except Exception as e:\n",
+        "        print(f\"  Error: {e}\")\n",
+        "else:\n",
+        "    print(\"  Not configured\")\n",
+        "print()"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "a7b8c9d0",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Verify Memory\n",
+        "print(\"=\" * 50)\n",
+        "print(\"  Memory\")\n",
+        "print(\"=\" * 50)\n",
+        "\n",
+        "memory_config = utils.load_config(\"memory\")\n",
+        "if memory_config:\n",
+        "    memory_id = memory_config[\"memory_id\"]\n",
+        "    try:\n",
+        "        mem = control.get_memory(memoryId=memory_id)\n",
+        "        mem_data = mem.get(\"memory\", mem)\n",
+        "        print(f\"  Name:       {mem_data.get('name', 'N/A')}\")\n",
+        "        print(f\"  ID:         {memory_id}\")\n",
+        "        print(f\"  Status:     {mem_data.get('status', 'UNKNOWN')}\")\n",
+        "        strategies = mem_data.get('memoryStrategies', [])\n",
+        "        print(f\"  Strategies: {len(strategies)}\")\n",
+        "        for s in strategies:\n",
+        "            for key, val in s.items():\n",
+        "                if isinstance(val, dict):\n",
+        "                    print(f\"    - {val.get('name', key)}\")\n",
+        "    except Exception as e:\n",
+        "        print(f\"  Error: {e}\")\n",
+        "else:\n",
+        "    print(\"  Not configured\")\n",
+        "print()"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "b8c9d0e1",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Verify Gateway\n",
+        "print(\"=\" * 50)\n",
+        "print(\"  Gateway\")\n",
+        "print(\"=\" * 50)\n",
+        "\n",
+        "gateway_config = utils.load_config(\"gateway\")\n",
+        "if gateway_config:\n",
+        "    gateway_id = gateway_config[\"gateway_id\"]\n",
+        "    try:\n",
+        "        gw = control.get_gateway(gatewayIdentifier=gateway_id)\n",
+        "        print(f\"  Name:     {gw.get('name', 'N/A')}\")\n",
+        "        print(f\"  ID:       {gateway_id}\")\n",
+        "        print(f\"  Status:   {gw.get('status', 'UNKNOWN')}\")\n",
+        "        print(f\"  Protocol: {gw.get('protocolType', 'N/A')}\")\n",
+        "        print(f\"  Auth:     {gw.get('authorizerType', 'N/A')}\")\n",
+        "        policy_cfg = gw.get('policyEngineConfiguration', {})\n",
+        "        if policy_cfg:\n",
+        "            print(f\"  Policy:   {policy_cfg.get('mode', 'N/A')} mode\")\n",
+        "    except Exception as e:\n",
+        "        print(f\"  Error: {e}\")\n",
+        "else:\n",
+        "    print(\"  Not configured\")\n",
+        "print()"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "c9d0e1f2",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Verify Policy Engine\n",
+        "print(\"=\" * 50)\n",
+        "print(\"  Policy Engine\")\n",
+        "print(\"=\" * 50)\n",
+        "\n",
+        "policy_config = utils.load_config(\"policy\")\n",
+        "if policy_config:\n",
+        "    engine_id = policy_config[\"policy_engine_id\"]\n",
+        "    try:\n",
+        "        engine = control.get_policy_engine(policyEngineId=engine_id)\n",
+        "        print(f\"  ID:     {engine_id}\")\n",
+        "        print(f\"  Status: {engine.get('status', 'UNKNOWN')}\")\n",
+        "        print(f\"  Mode:   {policy_config.get('enforcement_mode', 'N/A')}\")\n",
+        "\n",
+        "        # List policies\n",
+        "        try:\n",
+        "            policies = control.list_policies(policyEngineId=engine_id)\n",
+        "            policy_list = policies.get(\"policies\", [])\n",
+        "            for p in policy_list:\n",
+        "                print(f\"    - {p.get('name', 'unnamed')} ({p.get('status', '?')})\")\n",
+        "            print(f\"  Total:  {len(policy_list)} Cedar policies\")\n",
+        "        except Exception:\n",
+        "            pass\n",
+        "    except Exception as e:\n",
+        "        print(f\"  Error: {e}\")\n",
+        "else:\n",
+        "    print(\"  Not configured\")\n",
+        "print()"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "d0e1f2a3",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Verify Evaluations\n",
+        "print(\"=\" * 50)\n",
+        "print(\"  Evaluations\")\n",
+        "print(\"=\" * 50)\n",
+        "\n",
+        "evals_config = utils.load_config(\"evaluations\")\n",
+        "if evals_config:\n",
+        "    custom_evals = evals_config.get(\"custom_evaluators\", {})\n",
+        "    builtin_evals = evals_config.get(\"builtin_evaluators\", [])\n",
+        "    print(f\"  Custom evaluators:  {len(custom_evals)}\")\n",
+        "    for name, eid in custom_evals.items():\n",
+        "        print(f\"    - {name}: {eid}\")\n",
+        "    print(f\"  Built-in evaluators: {len(builtin_evals)}\")\n",
+        "    for name in builtin_evals:\n",
+        "        print(f\"    - {name}\")\n",
+        "else:\n",
+        "    print(\"  Not configured\")\n",
+        "print()"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "kr42kp7h7m",
+      "metadata": {},
+      "source": [
+        "## Build & Deploy (SPA Frontend AWS)\n",
+        "\n",
+        "Processo de liberação ao usuário final: Acoplar o Backend completo num Web Client seguro e assíncrono.\n",
+        "\n",
+        "Os blocos originais (API Gateway regional, Lambdas em python, CloudFront DNS mapping, S3 Block Store e Banco Operacional DynamoDB) nasceram todos provisionados pelo script basilar de pre-requisitos via CloudFormation. A etapa presente injeta todo seu trabalho do `AgentCore` nessa arquitetura estática inicial:\n",
+        "\n",
+        "1. **Concessão OAuth no Runtime** — Habilita comunicação Server-Sent Events diretamente de conexões com claims JWT Cognito corretos.\n",
+        "2. **Injeta roteamento no AWS API Gateway** — Aponta a Rota API Rest `/chat` ao Runtime.\n",
+        "3. **Persiste o LTM via Lambda** — O script de memória atualiza a base da lambda do histórico com ID local.\n",
+        "4. **Upload S3 de Build Produtivo Web** — Script escreve config.js em tempo real com ARNs globais e dispara PUT pro Bucket WebS3.\n",
+        "5. **Trigger de Cache Invalidation** — Expurga os arquivos defasados no cluster CDN CloudFront globalmente e injeta na beira os arquivos buildados."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "q5b72l92qxo",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Deploy the frontend (Runtime OAuth + API Gateway + S3/CloudFront + Lambda)\n",
+        "# This takes 3-5 minutes on first deploy.\n",
+        "\n",
+        "import sys; sys.path.insert(0, 'scripts')\n",
+        "from deploy_frontend import deploy\n",
+        "\n",
+        "frontend_config = deploy()"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "m7a72yzfu28",
+      "metadata": {},
+      "source": [
+        "## Ponto de Conexão na Produção Final\n",
+        "\n",
+        "Infraestutura totalmente operacional e acessível via Amazon CloudFront. Faça autenticação:\n",
+        "\n",
+        "- **Usuário ID:** `workshop@example.com`\n",
+        "- **Master Key:** `WorkshopPass123!`\n",
+        "\n",
+        "A validação (End to End Testing E2E) deverá explorar todas as fronteiras de integração dos FMs:\n",
+        "1. **Persistência Neural:** \"Salve nas preferências e lembre-se, minha linguagem primária é o python\" (Testa Memory Node LTM).\n",
+        "2. **Carga em Sandbox Restrito:** \"Construa o fibonacci de 20 e me dê os números resultantes numérico.\" (Testa o Code Interpreter Serverless CPU).\n",
+        "3. **Integração Target-Role IAM:** \"Aloque a tarefa ler docs na cloud AWS\". (Chama MCP > Intercepta no Cedar Gateway > Bate na Lambda > Grava DynamoDB).\n",
+        "4. **Conexão Real-Time Internet:** \"O que tem de novidade no AWS Re:Invent 2024?\" (Roteamento nativo usando Chrome).\n",
+        "5. **Session Dropping:** Renovar Chat inteiro, apagar tela. Inquerir: \"Ok, qual é de fato a melhor linguagem de cloud para mim?\" (Valida cross-session LTM lookup heurístico)."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "k4fp2xas018",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Print the frontend URL and login credentials\n",
+        "frontend_config = utils.load_config(\"frontend\")\n",
+        "\n",
+        "if frontend_config:\n",
+        "    url = frontend_config.get(\"cloudfront_url\", \"\")\n",
+        "    print(\"=\" * 60)\n",
+        "    print(\"  Aria Web Application\")\n",
+        "    print(\"=\" * 60)\n",
+        "    print()\n",
+        "    print(f\"  URL:      {url}\")\n",
+        "    print()\n",
+        "    print(f\"  Username: workshop@example.com\")\n",
+        "    print(f\"  Password: WorkshopPass123!\")\n",
+        "    print()\n",
+        "    print(f\"  Open the URL above in your browser to start chatting with Aria.\")\n",
+        "    print()\n",
+        "else:\n",
+        "    print(\"Frontend not deployed yet. Run the deployment cell above first.\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "b0c1d2e3",
+      "metadata": {},
+      "source": [
+        "## Relatório Técnico Conclusivo e Recapitulação\n",
+        "\n",
+        "A engenharia foi implementada inteiramente no stack modular nativo de Cloud do AWS AgentCore:\n",
+        "\n",
+        "| Labs Técnicos Operacionais | Implementação Arquitetural | Entregável Real de Produção |\n",
+        "|---|---|---|\n",
+        "| **00** | Automação e Provisionamento Basilar | Infraestrutura global como Código (CloudFormation e SAM IAM). |\n",
+        "| **01** | Linha de Comando (CLI AWS AgentCore) | Ferramentas essenciais para o loop interno (SDLC Local). |\n",
+        "| **02** | Injeção Lógica no Runtime Python | Contêiner Seguro com SDK AWS. Streaming por default. |\n",
+        "| **03** | Ferramentas de Nuvem AWS Zero-Config | Injeção robusta sem a dor da governança ou instalação local. |\n",
+        "| **04** | Memória Vectorial Heurística e Transacional | Múltiplas instâncias gerando STM & LTM orgânicos e isolados. |\n",
+        "| **05** | Gateway Inteligente em IAM Cognito | Arquitetura segura interligando API legado (via MCP). |\n",
+        "| **06** | Escudo de Barreira Operacional Cedar | Proteções imutáveis que previnem ações destrutivas ou fraudes. |\n",
+        "| **07** | Matriz Completa CloudWatch (Log + Traces) e Auditing Automático | Soluções reais escalonáveis corporativas na Bedrock OTel. |\n",
+        "| **08** | Go-live (Infraestrutura de Interface e Rede) | CloudFront edge servindo a camada final segura para usuário via SSE. |\n",
+        "\n",
+        "A arquitetura adota profundamente o paradigma de Single Responsibility (responsabilidade única de microsserviço), o que compõe malhas elásticas perfeitas na nuvem. O código fonte no backend Python segue enxuto: Ele se preocupa com IA e não com a infraestrutura e governança AWS. Essas rotinas sensíveis habitam inteiramente na camada de infra AgentCore Platform.\n",
+        "\n",
+        "A infra Web acessa via streaming proxy (Gateway AWS Serverless). A chave-pilar na engenharia está no JWT gerado no login, ele dita os limites de todo acesso interno em Runtime-Downstream. E, novamente, sem que o código altere uma vírgula de arquitetura lógica."
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "c1d2e3f4",
+      "metadata": {},
+      "source": [
+        "## Limpeza da Infraestrutura Cloud AWS\n",
+        "\n",
+        "Terminou? Faça o desmanche (Tear down) preventivo via deleção em CLI. O código a seguir encerra recursos do AgentCore com sucesso e sem rastros tarifados.\n",
+        "\n",
+        "> **Atenção (Workshop AWS Integrado):** Em ambientes nativos de Studio o tempo expira automaticamente deletando infraestrutura associada de backend pesado (RDS, S3, lambdas base, cognito etc). Você só precisará executar exclusão nas APIs recém injetadas na nuvem. A AWS varrerá o resto no término da janela operacional.\n",
+        "\n",
+        "Sendo seu cluster próprio self-hosted da empresa, os recursos persistentes legados nas `stacks` (cfn e infra visual de nuvem) exigirão o Excluir no Painel de Controle oficial."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "7ukklptfp2m",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Delete AgentCore resources (Runtime, Memory, Gateway, Policy Engine)\n",
+        "import sys; sys.path.insert(0, '..'); sys.path.insert(0, 'scripts')\n",
+        "from cleanup import cleanup\n",
+        "\n",
+        "# Uncomment the next line to delete all AgentCore workshop resources:\n",
+        "# cleanup(auto_confirm=True)"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "e3f4a5b6",
+      "metadata": {},
+      "source": [
+        "## Passos Futuros\n",
+        "\n",
+        "Com esta especialização e implantação complexa, experimente ampliar os limites arquiteturais:\n",
+        "\n",
+        "- **Extensão Severa em Gateways Targets**: Ampliar a IA integrando Sistemas CRM Corporativos (Salesforce), Mensageiros REST e API's ERP via MCP standard AWS.\n",
+        "- **Escalar Segurança em Políticas (Policy/Cedar)**: Limitar acessos na empresa inteira através de Role Based Claims extraídas nativamente do JWT AWS Cognito (Isolando a operação por Time - Admins vs Users).\n",
+        "- **Monitoramento IA Absoluto (Custom Evaluators)**: Escalar Avaliadores com base de referências que garantam que sua corporação e Compliance AWS são estritamente observados pelo Agente Aria (Auditorias rigorosas do Output em tom de Resposta).\n",
+        "- **Nós Distribuídos (Multi-Agent Swarm)**: Ativar infraestrutura na qual diversos perfis autônomos acessam o AgentCore Gateway como elos intercomunicáveis (Modelagem Complexa Multi-IA).\n",
+        "- **Maturidade MLOps/DevOps (Prod)**: Automatizar toda essa esteira contínua nativa através do AWS CodePipeline integrado ao trigger de `deploy_agent.deploy()`. O ambiente AWS lida maravilhosamente bem com deploy nativo contínuo via esteira CI/CD.\n",
+        "\n",
+        "### Resources\n",
+        "\n",
+        "- [Amazon Bedrock AgentCore Documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html)\n",
+        "- [Strands Agents SDK](https://github.com/strands-agents/sdk-python)\n",
+        "- [Cedar Language Reference](https://docs.cedarpolicy.com/)\n",
+        "- [AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agents-tools-runtime.html)\n",
+        "- [AgentCore Gateway](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html)\n",
+        "- [AgentCore Memory](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/memory.html)\n",
+        "- [AgentCore Policy](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy.html)\n",
+        "- [AgentCore Observability](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability.html)\n",
+        "- [AgentCore Evaluations](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/evaluations.html)"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "id": "f4a5b6c7",
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "import sys; sys.path.insert(0, '..')\n",
+        "from shared.progress import show\n",
+        "\n",
+        "show(\"08\")"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "id": "nhz09ehuci",
+      "metadata": {},
+      "source": [
+        "---\n",
+        "\n",
+        "**Parabéns pela Engenharia AWS!** Ao finalizar toda a implementação, a Aria é formalmente uma aplicação servless em modo de Produção Contínua com base nativa nos nove principais serviços do ecossistema Amazon AgentCore."
+      ]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "display_name": "Workshop (Python 3.12)",
+      "language": "python",
+      "name": "workshop"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.12.0"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}

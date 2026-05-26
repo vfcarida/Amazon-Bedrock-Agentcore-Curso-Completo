@@ -70,13 +70,14 @@ Ao longo dos módulos, nossa assistente evolui na nuvem:
 
 ### Ferramentas Necessárias
 Para rodar este laboratório localmente, instale:
-- **Python 3.12+**
-- **Node.js 20+** e **npm**
-- **AWS CLI v2** (Configurado com suas credenciais)
-- **AWS CDK** (`npm install -g aws-cdk`)
+- **[VS Code](https://code.visualstudio.com/download)**
+- **[Python 3.12+](https://www.python.org/)**
+- **[Node.js 20+](https://nodejs.org/en/download)** e **npm**
+- **[AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)** (Configurado com suas credenciais)
+- **[AWS CDK](https://docs.aws.amazon.com/cdk/v2/guide/getting-started.html)** (`npm install -g aws-cdk`)
 - **AgentCore CLI** (`npm install -g @aws/agentcore`)
 - **uv** (Gerenciador rápido de pacotes Python: `pip install uv`)
-- **Docker** (Essencial para montar as imagens de deploy)
+- **[Docker](https://www.docker.com/)** (Essencial para montar as imagens de deploy)
 - **Jupyter** (`pip install jupyter ipykernel` - usaremos notebooks para o passo a passo)
 
 ### Permissões e Região da AWS

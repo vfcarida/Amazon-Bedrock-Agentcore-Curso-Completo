@@ -23,9 +23,16 @@ from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
+# Modelo usado como "juiz" para avaliar as respostas do agente.
+# O LLM-as-a-Judge é um padrão onde um modelo de IA avalia a qualidade
+# das respostas de outro modelo, seguindo critérios definidos em um prompt.
 EVALUATOR_MODEL_ID = os.environ.get(
     "EVALUATOR_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 )
+
+# Porcentagem de invocações que serão avaliadas automaticamente.
+# 10% é um bom equilíbrio entre cobertura e custo (cada avaliação gera
+# uma chamada extra ao modelo juiz).
 SAMPLING_RATE = int(os.environ.get("SAMPLING_RATE", "10"))
 
 
@@ -40,6 +47,9 @@ def get_evaluator_definitions() -> list[dict]:
     """
     return [
         {
+            # ResponseQuality: Avalia a qualidade geral das respostas da Aria.
+            # Nível SESSION: analisa a conversa inteira (todas as mensagens da sessão).
+            # Critérios: Precisão, completude, relevância, clareza e fundamentação.
             "evaluatorName": "ResponseQuality",
             "description": (
                 "Evaluates helpfulness, accuracy, and completeness of agent "
@@ -48,6 +58,9 @@ def get_evaluator_definitions() -> list[dict]:
             "level": "SESSION",
             "evaluatorConfig": {
                 "llmAsAJudge": {
+                    # Instruções para o modelo juiz: definem os critérios de avaliação
+                    # e a escala de notas (1 a 5). O juiz lê toda a conversa,
+                    # incluindo chamadas de ferramentas, e dá uma nota.
                     "instructions": """You are evaluating the quality of an AI assistant named Aria.
 
 Examine the full conversation session including:
@@ -64,6 +77,7 @@ Score on this scale:
 
 Weigh: Accuracy, Completeness, Relevance, Clarity, Groundedness.
 Provide brief justification before the numeric rating.""",
+                    # Escala de notas numéricas com rótulos descritivos.
                     "ratingScale": {
                         "numerical": [
                             {"value": 1, "label": "Unacceptable", "definition": "Hallucinations or harmful content"},
@@ -82,6 +96,10 @@ Provide brief justification before the numeric rating.""",
             },
         },
         {
+            # ToolUsage: Avalia se o agente usou as ferramentas corretas e de forma eficiente.
+            # Nível TRACE: analisa cada invocação individual (cada chamada ao agente).
+            # Critérios: Seleção de ferramenta, qualidade dos inputs, eficiência,
+            # completude e tratamento de erros.
             "evaluatorName": "ToolUsage",
             "description": (
                 "Evaluates whether the agent selected and used appropriate tools "
@@ -139,6 +157,8 @@ def setup_evaluations(
     sampling_rate = sampling_rate or SAMPLING_RATE
     region = utils.get_region()
     cfn = utils.get_all_cfn_outputs()
+    # Role IAM que o serviço de avaliação usa para acessar os logs do CloudWatch
+    # e invocar o modelo juiz.
     evaluation_role_arn = cfn.get("EvaluationRoleArn")
     client = boto3.client("bedrock-agentcore-control", region_name=region)
 
@@ -148,14 +168,16 @@ def setup_evaluations(
     print(f"  Sampling rate: {sampling_rate}%")
     print()
 
-    # --- Fase 1: Criar os avaliadores ---
+    # --- Fase 1: Criar os avaliadores (Evaluators) ---
+    # Avaliadores são definições reutilizáveis que dizem ao sistema COMO avaliar.
+    # Cada um tem um prompt de instruções e uma escala de notas.
     print("Phase 1: Creating custom evaluators")
     evaluator_ids = {}
 
     for eval_def in get_evaluator_definitions():
         name = eval_def["evaluatorName"]
 
-        # Verifica se já existe um gateway criado
+        # Verifica se já existe um avaliador com este nome (idempotência).
         existing_id = None
         try:
             resp = client.list_evaluators()
@@ -182,30 +204,35 @@ def setup_evaluations(
                 print(f"  ❌ Failed to create {name}: {e}")
                 raise
 
-    # --- Fase 2: Configurações de avaliação online ---
+    # --- Fase 2: Configurações de Avaliação Online ---
+    # As avaliações online rodam automaticamente em produção:
+    # - Pegam uma amostra das invocações do agente (sampling)
+    # - Leem os traces do CloudWatch
+    # - Enviam para o modelo juiz avaliar
+    # - Armazenam os resultados para análise posterior
     print()
     print("Phase 2: Creating online evaluation configurations")
 
-    # Pega o grupo de logs do CloudWatch onde ficam os traces do AgentCore Runtime
+    # Grupo de logs do CloudWatch onde ficam os traces do AgentCore Runtime.
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent_name}"
 
     online_evals = [
         {
             "name": "QualityMonitor",
             "evaluator_name": "ResponseQuality",
-            "sampling_pct": sampling_rate,
+            "sampling_pct": sampling_rate,  # 10% das invocações
         },
         {
             "name": "ToolMonitor",
             "evaluator_name": "ToolUsage",
-            "sampling_pct": max(sampling_rate // 2, 1),
+            "sampling_pct": max(sampling_rate // 2, 1),  # 5% (metade do sampling)
         },
     ]
 
     for oe in online_evals:
         name = oe["name"]
 
-        # Verifica se já existe um gateway criado
+        # Verifica se já existe uma configuração com este nome.
         try:
             resp = client.list_online_evaluation_configs()
             existing = any(
@@ -228,11 +255,17 @@ def setup_evaluations(
                 onlineEvaluationConfigName=name,
                 description=f"Online evaluation for {oe['evaluator_name']}",
                 rule={
+                    # samplingConfig: Define a porcentagem de invocações que serão avaliadas.
+                    # Um valor baixo (5-10%) mantém o custo sob controle enquanto
+                    # fornece dados estatisticamente relevantes.
                     "samplingConfig": {
                         "samplingPercentage": float(oe["sampling_pct"]),
                     },
                 },
                 dataSourceConfig={
+                    # CloudWatch Logs: Os traces do AgentCore Runtime são armazenados
+                    # automaticamente neste grupo de logs. O avaliador lê esses traces
+                    # para entender o que o agente fez durante cada invocação.
                     "cloudWatchLogs": {
                         "logGroupNames": [log_group],
                         "serviceNames": ["bedrock-agentcore"],
@@ -240,6 +273,7 @@ def setup_evaluations(
                 },
                 evaluators=[{"evaluatorId": evaluator_id}],
                 evaluationExecutionRoleArn=evaluation_role_arn,
+                # enableOnCreate: Ativa a avaliação imediatamente após a criação.
                 enableOnCreate=True,
             )
             print(f"  ✅ Created {name} ({oe['sampling_pct']}% sampling)")
@@ -249,6 +283,7 @@ def setup_evaluations(
             else:
                 print(f"  ❌ Failed to create {name}: {e}")
 
+    # Salva as configurações para referência.
     config = {
         "evaluator_ids": evaluator_ids,
         "agent_name": agent_name,

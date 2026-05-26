@@ -22,11 +22,18 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# --- Configuração ---
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
 MEMORY_ID = os.environ.get("MEMORY_ID", "")
+
+# GATEWAY_ENDPOINT: URL do Gateway MCP criado no Módulo 05.
+# O agente se conecta a este endpoint como um cliente MCP para descobrir
+# e usar as ferramentas da API de Tarefas (list, create, update, delete).
 GATEWAY_ENDPOINT = os.environ.get("GATEWAY_ENDPOINT", "")
 
+# System Prompt atualizado: Agora inclui a capacidade de gerenciar tarefas
+# e instrui o modelo a oferecer proativamente a criação de tarefas.
 SYSTEM_PROMPT = """\
 You are Aria, a personal AI assistant. You have the following capabilities:
 
@@ -62,6 +69,10 @@ def _extract_jwt(payload: dict, context) -> str:
     1. payload["authorization"] -- for SigV4 invocations that pass the JWT in the request body
     2. context.request_headers["Authorization"] -- for JWT-authenticated Runtime invocations
     """
+    # IMPORTANTE: O JWT precisa ser repassado para o Gateway para que:
+    # 1. O Gateway saiba quem é o usuário (autenticação)
+    # 2. O Cedar Policy possa avaliar as permissões desse usuário (autorização)
+    # 3. A API de Tarefas saiba de quem são as tarefas
     auth_header = payload.get("authorization", "")
     if not auth_header:
         try:
@@ -74,6 +85,8 @@ def _extract_jwt(payload: dict, context) -> str:
 
 def _extract_actor_id(auth_header: str) -> str:
     """Extract the user's actor ID (sub claim) from a JWT."""
+    # Mesmo mecanismo da V3, mas agora recebe o header já extraído
+    # em vez de acessar o context diretamente.
     try:
         if auth_header.startswith("Bearer "):
             import base64
@@ -109,17 +122,29 @@ def _create_agent(session_id: str, actor_id: str, auth_header: str):
     tools = [code_interpreter.code_interpreter, browser_tool.browser]
 
     # --- Cliente MCP do Gateway --------------------------------------------------
+    # MCP (Model Context Protocol): Protocolo aberto que permite que modelos de IA
+    # descubram e usem ferramentas automaticamente. O Gateway expõe a API de Tarefas
+    # como um servidor MCP, e o agente se conecta como cliente.
+    #
+    # Fluxo de identidade (JWT forwarding):
+    # Usuário → Frontend → Runtime (JWT no header) → Agente → Gateway (JWT repassado) → API de Tarefas
     if GATEWAY_ENDPOINT:
         import httpx
         from strands.tools.mcp import MCPClient
         from mcp.client.streamable_http import streamable_http_client
 
+        # Repassa o JWT do usuário no cabeçalho Authorization do cliente MCP.
+        # Isso garante que o Gateway sabe quem é o usuário e pode aplicar
+        # as políticas Cedar corretamente.
         gateway_headers = {}
         if auth_header.startswith("Bearer "):
             gateway_headers["Authorization"] = auth_header
 
         _gw_headers = dict(gateway_headers)
 
+        # MCPClient: Cria um cliente MCP que se conecta ao Gateway via HTTP.
+        # O Gateway retorna a lista de ferramentas disponíveis (list_tasks, create_task, etc.)
+        # e o Strands SDK as registra automaticamente para o modelo usar.
         gateway_mcp = MCPClient(lambda: streamable_http_client(
             url=GATEWAY_ENDPOINT,
             http_client=httpx.AsyncClient(headers=_gw_headers),
@@ -127,6 +152,7 @@ def _create_agent(session_id: str, actor_id: str, auth_header: str):
         tools.append(gateway_mcp)
 
     # --- Memory (Memória) --------------------------------------------------------------
+    # Mesma configuração da V3 — não mudou nada aqui.
     session_manager = None
     if MEMORY_ID:
         from bedrock_agentcore.memory.integrations.strands.config import (
@@ -164,6 +190,8 @@ async def invoke(payload: dict, context: dict = None):
     global _agent
 
     context = context or {}
+
+    # Extrai o JWT e o actor_id para autenticação e identidade.
     auth_header = _extract_jwt(payload, context)
     actor_id = _extract_actor_id(auth_header)
     session_id = payload.get("session_id", "default")
@@ -175,6 +203,8 @@ async def invoke(payload: dict, context: dict = None):
     logger.info("Invocation: actor_id=%s, session_id=%s", actor_id, session_id)
 
     if _agent is None:
+        # O auth_header é passado para o _create_agent para que o cliente MCP
+        # do Gateway receba o JWT do usuário.
         _agent = _create_agent(session_id, actor_id, auth_header)
 
     stream = _agent.stream_async(user_message)

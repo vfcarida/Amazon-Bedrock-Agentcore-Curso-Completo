@@ -27,6 +27,10 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# --- Configuração ---
+# Na V5, as variáveis de ambiente são as mesmas da V4.
+# A diferença está no deploy: o entrypoint é envolvido pelo opentelemetry-instrument,
+# que automaticamente coleta traces de todas as chamadas HTTP, SDK e ferramentas.
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
 MEMORY_ID = os.environ.get("MEMORY_ID", "")
@@ -62,6 +66,7 @@ _agent = None
 
 def _extract_jwt(payload: dict, context) -> str:
     """Extract the JWT from the payload or context headers."""
+    # Mesmo mecanismo da V4: tenta extrair o JWT do payload ou dos headers.
     auth_header = payload.get("authorization", "")
     if not auth_header:
         try:
@@ -100,6 +105,8 @@ def _create_agent(session_id: str, actor_id: str, auth_header: str):
     Heavy imports are deferred to first call so module-level init stays
     within the Runtime cold-start window.
     """
+    # Lazy imports: Carregamos as dependências pesadas apenas na primeira chamada.
+    # Isso reduz o tempo de cold start da microVM do Runtime.
     from strands import Agent
     from strands.models.bedrock import BedrockModel
     from strands_tools.code_interpreter.agent_core_code_interpreter import AgentCoreCodeInterpreter
@@ -113,6 +120,7 @@ def _create_agent(session_id: str, actor_id: str, auth_header: str):
     tools = [code_interpreter.code_interpreter, browser_tool.browser]
 
     # --- Cliente MCP do Gateway --------------------------------------------------
+    # Mesmo código da V4: conecta ao Gateway e repassa o JWT.
     if GATEWAY_ENDPOINT:
         import httpx
         from strands.tools.mcp import MCPClient
@@ -178,6 +186,15 @@ async def invoke(payload: dict, context: dict = None):
 
     logger.info("Invocation: actor_id=%s, session_id=%s", actor_id, session_id)
 
+    # DIFERENÇA PRINCIPAL DA V5: Bloco try/except/finally para produção.
+    # Em produção, erros não podem "sumir" silenciosamente. Aqui garantimos que:
+    # 1. Erros são logados com stack trace completo (logger.exception)
+    # 2. A exceção é re-lançada para que o Runtime retorne erro ao cliente
+    # 3. O log de conclusão sempre é registrado (finally), mesmo em caso de erro
+    #
+    # O OpenTelemetry (ativado via entrypoint wrapper) captura automaticamente
+    # todos os traces e os envia para o CloudWatch/X-Ray, permitindo debug
+    # e monitoramento de performance em tempo real.
     try:
         if _agent is None:
             _agent = _create_agent(session_id, actor_id, auth_header)

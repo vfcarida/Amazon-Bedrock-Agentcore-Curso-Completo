@@ -3,6 +3,9 @@
 Displays a visual checklist showing which modules have been completed,
 based on the presence of deployed resources (saved configs).
 """
+# Módulo de progresso: Exibe um checklist visual no terminal mostrando
+# quais módulos do curso já foram completados. Detecta automaticamente
+# o progresso verificando se os recursos correspondentes existem na AWS.
 
 from . import utils
 
@@ -32,6 +35,11 @@ def _all_services_active() -> bool:
 
 
 def show(current_module: str | None = None) -> None:
+    # Mostra uma caixa visual com o progresso do workshop.
+    # Cada módulo é marcado com:
+    # ✅ = Completado (recurso detectado)
+    # 🔵 = Módulo atual (você está aqui)
+    # ⬜ = Ainda não completado
     """Display the workshop progress checklist.
 
     Args:

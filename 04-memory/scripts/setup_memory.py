@@ -30,12 +30,15 @@ def create_memory(region: str | None = None) -> dict:
         Dict with memory_id, region, and strategies.
     """
     region = region or utils.get_region()
+    # Cliente da API de controle do AgentCore — usado para criar e gerenciar recursos.
     client = boto3.client("bedrock-agentcore-control", region_name=region)
 
     utils.print_banner("Creating AgentCore Memory")
     print()
 
-    # Verifica se o recurso já existe na AWS
+    # --- Passo 1: Verificar se o recurso de memória já existe na AWS ---
+    # Faz uma busca por memórias que comecem com "AriaMemory".
+    # Se encontrar uma que já esteja ACTIVE ou READY, reutiliza ela (idempotência).
     try:
         paginator = client.get_paginator("list_memories")
         for page in paginator.paginate():
@@ -52,7 +55,8 @@ def create_memory(region: str | None = None) -> dict:
     except ClientError:
         pass
 
-    # Cria uma nova memória para o agente
+    # --- Passo 2: Criar uma nova memória com 3 estratégias de LTM (Long-Term Memory) ---
+    # Cada estratégia extrai um tipo diferente de informação das conversas:
     print("Creating Memory resource with LTM strategies...")
     try:
         resp = client.create_memory(
@@ -61,9 +65,15 @@ def create_memory(region: str | None = None) -> dict:
                 "Memory for Aria personal assistant - supports conversation "
                 "persistence and long-term user knowledge"
             ),
+            # eventExpiryDuration: Tempo (em dias) que os eventos brutos de conversa
+            # ficam armazenados antes de serem apagados. As memórias extraídas
+            # (resumos, preferências, fatos) persistem indefinidamente.
             eventExpiryDuration=90,
             memoryStrategies=[
                 {
+                    # SessionSummarizer: Ao final de cada sessão, gera um resumo
+                    # da conversa. Útil para dar contexto rápido em sessões futuras.
+                    # Namespace: /summaries/{actorId}/{sessionId}
                     "summaryMemoryStrategy": {
                         "name": "SessionSummarizer",
                         "description": "Summarizes conversation sessions for quick context retrieval",
@@ -71,6 +81,9 @@ def create_memory(region: str | None = None) -> dict:
                     }
                 },
                 {
+                    # PreferenceLearner: Extrai preferências do usuário mencionadas
+                    # durante a conversa (ex: "Eu prefiro Python", "Gosto de café").
+                    # Namespace: /preferences/{actorId}
                     "userPreferenceMemoryStrategy": {
                         "name": "PreferenceLearner",
                         "description": "Learns and stores user preferences across sessions",
@@ -78,6 +91,10 @@ def create_memory(region: str | None = None) -> dict:
                     }
                 },
                 {
+                    # FactExtractor: Extrai fatos sobre o usuário (ex: "Trabalho na
+                    # empresa X", "Moro em São Paulo"). Usa busca semântica para
+                    # encontrar fatos relevantes em conversas futuras.
+                    # Namespace: /facts/{actorId}
                     "semanticMemoryStrategy": {
                         "name": "FactExtractor",
                         "description": "Extracts and stores factual information from conversations",
@@ -97,7 +114,8 @@ def create_memory(region: str | None = None) -> dict:
     memory_id = resp["memory"]["id"]
     print(f"Memory ID: {memory_id}")
 
-    # Aguarda até que o status fique como ACTIVE
+    # --- Passo 3: Aguardar até que o recurso esteja ativo ---
+    # A criação é assíncrona — precisamos ficar verificando o status até chegar em ACTIVE.
     print("Waiting for memory to become ACTIVE...")
     utils.poll_until(
         describe_fn=lambda: client.get_memory(memoryId=memory_id).get("memory", {}),
@@ -106,6 +124,7 @@ def create_memory(region: str | None = None) -> dict:
         timeout=300,
     )
 
+    # --- Passo 4: Salvar a configuração para os próximos módulos usarem ---
     config = {
         "memory_id": memory_id,
         "region": region,
@@ -122,6 +141,7 @@ def create_memory(region: str | None = None) -> dict:
     print("    - PreferenceLearner → /preferences/{actorId}")
     print("    - FactExtractor     → /facts/{actorId}")
     print()
+    # Mostra o comando para definir a variável de ambiente manualmente (útil para debug)
     print(f"  export MEMORY_ID={memory_id}")
     print()
 

@@ -3,6 +3,10 @@
 Provides invoke() and stream() functions for use in notebook cells.
 Handles both authenticated (JWT) and unauthenticated invocations.
 """
+# Módulo de testes: Permite invocar o agente diretamente dos notebooks
+# para validar o deploy. Suporta dois modos:
+# 1. IAM (SigV4): Autenticação via credenciais AWS (Módulos 02-04)
+# 2. OAuth (JWT): Autenticação via token do Cognito (Módulos 05+)
 
 import json
 import uuid
@@ -20,6 +24,8 @@ def invoke(
     runtime_arn: str | None = None,
     print_response: bool = True,
 ) -> dict:
+    # Função principal para testar o agente a partir dos notebooks.
+    # Monta o payload JSON, chama o Runtime via SDK, e processa a resposta em streaming.
     """Invoke the deployed agent and return the response.
 
     Args:
@@ -95,6 +101,9 @@ def get_test_token(
     username: str = "workshop@example.com",
     password: str = "WorkshopPass123!",
 ) -> str:
+    # Cria (ou reutiliza) um usuário de teste no Cognito e retorna o token JWT.
+    # Este token é usado nos Módulos 05+ para testar o fluxo de autenticação
+    # completo: Frontend → Runtime → Gateway → API de Tarefas.
     """Authenticate a test user and return the ID token.
 
     Auto-discovers Cognito details from CFN outputs if not provided.

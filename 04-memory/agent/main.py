@@ -22,8 +22,13 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# --- Configuração ---
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+
+# MEMORY_ID: Identificador do recurso de memória no AgentCore.
+# É definido como variável de ambiente no deploy do Runtime (Módulo 04).
+# Se estiver vazio, o agente funciona normalmente mas sem memória persistente.
 MEMORY_ID = os.environ.get("MEMORY_ID", "")
 
 SYSTEM_PROMPT = """\
@@ -53,6 +58,10 @@ _agent = None
 
 def _extract_actor_id(context) -> str:
     """Extract the user's actor ID from the JWT in the Authorization header."""
+    # O actor_id identifica QUEM é o usuário. Ele vem do campo "sub" (subject)
+    # do token JWT enviado no cabeçalho Authorization.
+    # A memória usa esse ID para separar as memórias de cada usuário —
+    # assim, cada pessoa tem suas próprias preferências e fatos armazenados.
     try:
         headers = getattr(context, "request_headers", None) or {}
         auth_header = headers.get("Authorization", headers.get("authorization", ""))
@@ -61,9 +70,11 @@ def _extract_actor_id(context) -> str:
             import base64
             import json as _json
 
+            # Decodifica o payload do JWT (segunda parte, separada por pontos).
+            # Não precisamos verificar a assinatura aqui porque o Runtime já fez isso.
             token = auth_header[7:]
             payload_b64 = token.split(".")[1]
-            payload_b64 += "=" * (-len(payload_b64) % 4)
+            payload_b64 += "=" * (-len(payload_b64) % 4)  # Padding para base64
             claims = _json.loads(base64.urlsafe_b64decode(payload_b64))
 
             actor_id = claims.get("sub", "")
@@ -73,6 +84,7 @@ def _extract_actor_id(context) -> str:
     except Exception as e:
         logger.warning("Failed to extract actor_id from JWT: %s", e)
 
+    # Fallback: Se não conseguir extrair o ID, usa "anonymous".
     return "anonymous"
 
 
@@ -86,11 +98,16 @@ def _create_agent(session_id: str, actor_id: str):
     model = BedrockModel(model_id=MODEL_ID, region_name=AWS_REGION)
 
     # --- Tools (Ferramentas) ---------------------------------------------------------------
+    # Mesmas ferramentas da V2: Interpretador de Código e Navegador Web.
     code_interpreter = AgentCoreCodeInterpreter(region=AWS_REGION)
     browser_tool = AgentCoreBrowser(region=AWS_REGION)
     tools = [code_interpreter.code_interpreter, browser_tool.browser]
 
     # --- Memory (Memória) --------------------------------------------------------------
+    # Configura a integração com o AgentCore Memory, se o MEMORY_ID estiver definido.
+    # O session_manager cuida de:
+    # 1. Antes de cada resposta: buscar memórias relevantes e injetá-las no contexto
+    # 2. Depois de cada resposta: enviar a conversa para extração de novas memórias
     session_manager = None
     if MEMORY_ID:
         from bedrock_agentcore.memory.integrations.strands.config import (
@@ -100,6 +117,11 @@ def _create_agent(session_id: str, actor_id: str):
             AgentCoreMemorySessionManager,
         )
 
+        # retrieval_config: Define quantas memórias buscar de cada namespace
+        # e qual o score mínimo de relevância para incluí-las no contexto.
+        # - /preferences/{actorId}: Preferências do usuário (ex: "gosta de Python")
+        # - /facts/{actorId}: Fatos sobre o usuário (ex: "trabalha na empresa X")
+        # - /summaries/{actorId}/{sessionId}: Resumos de conversas passadas
         config = AgentCoreMemoryConfig(
             memory_id=MEMORY_ID,
             session_id=session_id,
@@ -115,6 +137,8 @@ def _create_agent(session_id: str, actor_id: str):
         )
 
     # --- Agent (Agente) ---------------------------------------------------------------
+    # O session_manager é passado opcionalmente. Se não tiver MEMORY_ID,
+    # o agente funciona igual ao V2 (sem memória).
     return Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
@@ -128,6 +152,8 @@ async def invoke(payload: dict, context: dict = None):
     global _agent
 
     context = context or {}
+
+    # Extrai informações de identidade do usuário antes de criar o agente.
     actor_id = _extract_actor_id(context)
     session_id = payload.get("session_id", "default")
     user_message = payload.get(
@@ -137,6 +163,8 @@ async def invoke(payload: dict, context: dict = None):
 
     logger.info("Invocation: actor_id=%s, session_id=%s", actor_id, session_id)
 
+    # O agente é criado com o session_id e actor_id para que a memória
+    # saiba de qual usuário e sessão estamos falando.
     if _agent is None:
         _agent = _create_agent(session_id, actor_id)
 
