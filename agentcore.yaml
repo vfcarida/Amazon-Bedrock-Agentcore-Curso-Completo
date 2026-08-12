@@ -1,0 +1,49 @@
+# AgentCore CLI Declarative Infrastructure Manifest
+version: "1.0"
+project:
+  name: "aria-agentcore-workshop"
+  description: "Aria AI Assistant deployed on Amazon Bedrock AgentCore Runtime"
+  region: "us-east-1"
+  language: "python3.12"
+
+runtime:
+  name: "aria-runtime"
+  entrypoint: "agent/main.py"
+  platform: "linux/arm64"
+  memory_size_mb: 2048
+  timeout_seconds: 900
+  ping:
+    path: "/ping"
+    expected_status: "HealthyBusy"
+  invocations:
+    path: "/invocations"
+    protocols:
+      - "ndjson"
+      - "ag-ui"
+
+ecr:
+  repository_name: "agentcore-aria-runtime"
+  tag: "latest"
+  image_uri: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/agentcore-aria-runtime:latest"
+
+services:
+  memory:
+    enabled: true
+    name: "aria-memory"
+    strategies:
+      - name: "SessionSummarizer"
+        namespace: "/summaries/{actorId}/{sessionId}"
+      - name: "PreferenceLearner"
+        namespace: "/preferences/{actorId}"
+      - name: "FactExtractor"
+        namespace: "/facts/{actorId}"
+  gateway:
+    enabled: true
+    name: "aria-gateway"
+    protocol: "mcp"
+    auth_mode: "CUSTOM_JWT"
+  policy:
+    enabled: true
+    engine: "cedar"
+    policy_directory: "policies"
+    default_decision: "DENY"

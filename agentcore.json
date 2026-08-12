@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore-schema.json",
+  "version": "1.0",
+  "metadata": {
+    "projectName": "aria-agentcore-workshop",
+    "description": "Amazon Bedrock AgentCore Deployment Specification",
+    "owner": "Vinicius Carida",
+    "region": "us-east-1"
+  },
+  "runtime": {
+    "agentName": "aria-agent",
+    "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/aria-agent-runtime",
+    "containerRepository": "agentcore-aria-runtime",
+    "architecture": "arm64",
+    "environment": {
+      "AWS_REGION": "us-east-1",
+      "MODEL_ID": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    }
+  },
+  "auth": {
+    "provider": "CognitoUserPool",
+    "mode": "CUSTOM_JWT",
+    "tokenHeader": "Authorization"
+  },
+  "policies": {
+    "directory": "policies",
+    "engine": "Cedar",
+    "evaluationMode": "DefaultDeny"
+  }
+}
