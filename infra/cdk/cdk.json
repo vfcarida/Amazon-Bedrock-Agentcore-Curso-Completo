@@ -1,0 +1,12 @@
+{
+  "app": ".venv/bin/python3 app.py",
+  "context": {
+    "user_pool_id": "REPLACE_WITH_YOUR_USER_POOL_ID",
+    "client_id": "REPLACE_WITH_YOUR_CLIENT_ID",
+    "cognito_domain": "REPLACE_WITH_YOUR_COGNITO_DOMAIN",
+    "runtime_id": "REPLACE_WITH_YOUR_RUNTIME_ID",
+    "memory_id": "REPLACE_WITH_YOUR_MEMORY_ID",
+    "account_id": "REPLACE_WITH_YOUR_ACCOUNT_ID",
+    "region": "us-east-1"
+  }
+}
