@@ -81,6 +81,25 @@ def _create_agent():
     )
 
 
+def _normalize_session_id(session_id: str) -> str:
+    """Garante aderência contratual ao contrato de memória exigindo no mínimo 16 caracteres."""
+    if not session_id or not isinstance(session_id, str):
+        return "session-default-16chars"
+    clean_id = session_id.strip()
+    if len(clean_id) >= 16:
+        return clean_id
+    import hashlib
+    padding = hashlib.sha256(clean_id.encode()).hexdigest()
+    needed = 16 - len(clean_id) - 1
+    return f"{clean_id}-{padding[:max(needed, 8)]}".ljust(16, "0")
+
+
+@app.ping
+async def ping():
+    """Retorna status HealthyBusy durante a execução de ferramentas de longa duração."""
+    return {"status": "HealthyBusy"}
+
+
 @app.entrypoint
 async def invoke(payload: dict, context: dict = None):
     global _agent

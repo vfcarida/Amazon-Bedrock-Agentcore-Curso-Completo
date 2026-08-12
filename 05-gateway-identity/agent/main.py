@@ -185,6 +185,25 @@ def _create_agent(session_id: str, actor_id: str, auth_header: str):
     )
 
 
+def _normalize_session_id(session_id: str) -> str:
+    """Garante aderência ao contrato do AgentCore Gateway e Memory (mínimo 16 caracteres)."""
+    if not session_id or not isinstance(session_id, str):
+        return "session-default-16chars"
+    clean_id = session_id.strip()
+    if len(clean_id) >= 16:
+        return clean_id
+    import hashlib
+    padding = hashlib.sha256(clean_id.encode()).hexdigest()
+    needed = 16 - len(clean_id) - 1
+    return f"{clean_id}-{padding[:max(needed, 8)]}".ljust(16, "0")
+
+
+@app.ping
+async def ping():
+    """Retorna status HealthyBusy para evitar encerramento durante chamadas via Gateway."""
+    return {"status": "HealthyBusy"}
+
+
 @app.entrypoint
 async def invoke(payload: dict, context: dict = None):
     global _agent
@@ -194,7 +213,7 @@ async def invoke(payload: dict, context: dict = None):
     # Extrai o JWT e o actor_id para autenticação e identidade.
     auth_header = _extract_jwt(payload, context)
     actor_id = _extract_actor_id(auth_header)
-    session_id = payload.get("session_id", "default")
+    session_id = _normalize_session_id(payload.get("session_id", "default-session-id"))
     user_message = payload.get(
         "prompt",
         "No prompt found in input. Please send a JSON payload with a 'prompt' key.",

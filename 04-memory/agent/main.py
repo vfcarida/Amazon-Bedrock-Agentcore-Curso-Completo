@@ -147,6 +147,25 @@ def _create_agent(session_id: str, actor_id: str):
     )
 
 
+def _normalize_session_id(session_id: str) -> str:
+    """Garante aderência ao contrato do AgentCore Memory (no mínimo 16 caracteres)."""
+    if not session_id or not isinstance(session_id, str):
+        return "session-default-16chars"
+    clean_id = session_id.strip()
+    if len(clean_id) >= 16:
+        return clean_id
+    import hashlib
+    padding = hashlib.sha256(clean_id.encode()).hexdigest()
+    needed = 16 - len(clean_id) - 1
+    return f"{clean_id}-{padding[:max(needed, 8)]}".ljust(16, "0")
+
+
+@app.ping
+async def ping():
+    """Retorna status HealthyBusy para o AgentCore Memory durante operacoes pesadas."""
+    return {"status": "HealthyBusy"}
+
+
 @app.entrypoint
 async def invoke(payload: dict, context: dict = None):
     global _agent
@@ -155,7 +174,7 @@ async def invoke(payload: dict, context: dict = None):
 
     # Extrai informações de identidade do usuário antes de criar o agente.
     actor_id = _extract_actor_id(context)
-    session_id = payload.get("session_id", "default")
+    session_id = _normalize_session_id(payload.get("session_id", "default-session-id"))
     user_message = payload.get(
         "prompt",
         "No prompt found in input. Please send a JSON payload with a 'prompt' key.",

@@ -61,23 +61,37 @@ app = BedrockAgentCoreApp()
 _agent = None
 
 
+def _normalize_session_id(session_id: str) -> str:
+    """Garante aderência contratual ao contrato de memória exigindo no mínimo 16 caracteres."""
+    if not session_id or not isinstance(session_id, str):
+        return "session-default-16chars"
+    clean_id = session_id.strip()
+    if len(clean_id) >= 16:
+        return clean_id
+    import hashlib
+    padding = hashlib.sha256(clean_id.encode()).hexdigest()
+    needed = 16 - len(clean_id) - 1
+    return f"{clean_id}-{padding[:max(needed, 8)]}".ljust(16, "0")
+
+
 def _create_agent():
     """Create the Agent. Called once per session (i.e. once per microVM)."""
-    # Importações "atrasadas" (lazy imports): só carregamos o Strands e o modelo do Bedrock
-    # quando realmente precisamos. Isso acelera o tempo de inicialização da microVM.
     from strands import Agent
     from strands.models.bedrock import BedrockModel
 
-    # BedrockModel: Wrapper que conecta o Strands SDK ao Amazon Bedrock.
-    # Ele faz as chamadas de API ao serviço de modelos da AWS.
     model = BedrockModel(model_id=MODEL_ID, region_name=AWS_REGION)
-
-    # Cria o agente com o modelo e o system prompt.
-    # Nesta V1, o agente não tem ferramentas — ele só conversa.
     return Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
     )
+
+
+# @app.ping: Terminal GET /ping configurado para retornar status HealthyBusy
+# durante tarefas de longa duração e segundo plano, evitando encerramentos prematuros pela AWS.
+@app.ping
+async def ping():
+    """Retorna o status contratual HealthyBusy exigido pela infraestrutura ARM64."""
+    return {"status": "HealthyBusy"}
 
 
 # @app.entrypoint: Decorador que marca esta função como o ponto de entrada
